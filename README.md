@@ -1,6 +1,6 @@
 # VOXScript
 
-> 음원/영상 링크 → STT → 번역 → 정리본 자동 생성 CLI 도구
+> 음원/영상 링크 → STT → 번역 → 정리본 자동 생성 도구
 
 **Whisper(로컬 STT) + DeepL(번역) + Gemini(전처리/화자구분/요약)** 파이프라인으로  
 YouTube / Google Drive / 로컬 파일을 자동으로 번역 스크립트로 변환합니다.
@@ -12,10 +12,11 @@ YouTube / Google Drive / 로컬 파일을 자동으로 번역 스크립트로 �
 - **다국어 STT** — Whisper medium (CUDA), 언어 자동 감지 또는 수동 지정
 - **중복 제거** — Gemini가 Whisper 슬라이딩 윈도우 중복 세그먼트 정리
 - **DeepL 번역** — 월 500,000자 무료 (한국어/영어/일본어 등)
-- **화자 구분** — Gemini 텍스트 분석 기반 자동 라벨링 (이름 직접 지정 가능)
+- **화자 구분** — Gemini 텍스트 분석 기반, 이름 직접 지정 + 3명 이상 지원
 - **다양한 출력 포맷** — TXT / SRT / Excel (화자별 색상 구분)
 - **자동 제목 추출** — Gemini가 내용 기반으로 파일명/폴더명 자동 생성
 - **Google Drive 연동** — 폴더 링크로 음원 직접 다운로드 (OAuth)
+- **Electron 데스크탑 앱** — React UI + FastAPI 백엔드 통합 (v0.2.0)
 
 ---
 
@@ -29,15 +30,16 @@ VOXScript/
 │   ├── cleaner.py        ← Gemini 전처리 (중복제거 + 문단묶기)
 │   ├── requirements.txt
 │   └── DAO/
-│       ├── __init__.py
 │       ├── downloader.py   ← YouTube / Google Drive / 로컬 파일
 │       ├── transcriber.py  ← Whisper STT (CUDA)
 │       ├── translator.py   ← DeepL 번역
-│       ├── diarizer.py     ← Gemini 화자 구분
+│       ├── diarizer.py     ← Gemini 화자 구분 (텍스트 기반)
 │       └── formatter.py    ← 파일 저장 (TXT/SRT/Excel) + Gemini 요약
 ├── electron/
 │   ├── main.js           ← Electron 메인 (FastAPI 백그라운드 실행)
 │   └── preload.js        ← IPC 브릿지
+├── frontend/             ← React + Vite UI (별도 레포: voxscript_frontend)
+├── package.json          ← Electron 패키징 설정
 └── .env.example
 ```
 
@@ -46,6 +48,7 @@ VOXScript/
 ## 환경 요구사항
 
 - Python 3.11
+- Node.js 18+
 - NVIDIA GPU (CUDA 12.1) — RTX 3060 이상 권장
 - ffmpeg (PATH 등록 필요)
 
@@ -53,57 +56,43 @@ VOXScript/
 
 ## 빠른 시작
 
-### 1. 의존성 설치
+### CLI 모드
 
 ```bash
 cd backend
 pip install -r requirements.txt
-
-# PyTorch CUDA 버전 (GPU 사용 필수)
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
-# ffmpeg 설치 (Windows)
-# https://ffmpeg.org/download.html 다운로드 후 PATH 추가
-```
-
-### 2. API 키 설정
-
-```bash
 cp .env.example .env
 # .env 파일 열어서 키 입력
-```
-
-| 키 | 발급처 | 비용 |
-|---|---|---|
-| `DEEPL_API_KEY` | https://www.deepl.com/ko/pro-api | 월 500,000자 무료 |
-| `GEMINI_API_KEY` | https://aistudio.google.com/ | 무료 (카드 불필요) |
-
-> Google Drive 연동 시 `credentials.json` 별도 필요 (하단 참고)
-
-### 3. 실행
-
-```bash
-cd backend
 
 # YouTube
 python pipeline.py "https://www.youtube.com/watch?v=VIDEO_ID" --lang en --format all
 
-# Google Drive 폴더
-python pipeline.py "https://drive.google.com/drive/folders/FOLDER_ID" --lang ja --format all
+# 화자 구분 (2명)
+python pipeline.py "URL" --lang en --format all --diarize --speakers 진행자 젠슨황
 
-# 로컬 파일
-python pipeline.py "./video.mp4" --lang es --format all
+# 화자 구분 (3명)
+python pipeline.py "URL" --lang en --format all --diarize --speakers 진행자 게스트1 게스트2
+```
 
-# 화자 구분 (기본: 인터뷰어/인터뷰이)
-python pipeline.py "URL" --lang en --format all --diarize
+### Electron 앱 모드
 
-# 화자 이름 직접 지정
-python pipeline.py "URL" --lang en --format all --diarize --speaker1 "진행자" --speaker2 "젠슨황"
+```bash
+# 루트에서
+npm install
+
+# 개발 모드 (Vite dev server + Electron)
+npm run dev
+
+# 프로덕션 빌드
+npm run build
+npm run electron
 ```
 
 ---
 
-## 전체 옵션
+## 전체 CLI 옵션
 
 ```
 positional arguments:
@@ -117,8 +106,7 @@ options:
   --import-dir          음원 임시 저장 폴더
   --export-dir          결과물 저장 폴더
   --diarize             화자 구분 활성화 (Gemini 텍스트 분석)
-  --speaker1            화자1 이름 (기본: 진행자,진행자1)
-  --speaker2            화자2 이름 (기본: 젠승황,진행자2)
+  --speakers            화자 이름 목록 (예: --speakers 진행자 젠슨황 게스트)
   --no-summary          Gemini 요약 생략
 ```
 
@@ -133,7 +121,16 @@ options:
 | `excel` | 타임코드/화자/원문/번역 Excel (화자별 색상) |
 | `all` | 전부 저장 |
 
-복수 선택: `--format srt_bilingual,excel`
+---
+
+## API 키 설정
+
+| 키 | 발급처 | 비용 |
+|---|---|---|
+| `DEEPL_API_KEY` | https://www.deepl.com/ko/pro-api | 월 500,000자 무료 |
+| `GEMINI_API_KEY` | https://aistudio.google.com/ | 무료 (카드 불필요) |
+
+> Google Drive 연동 시 `credentials.json` 별도 필요
 
 ---
 
@@ -176,7 +173,7 @@ options:
 
 1. [Google Cloud Console](https://console.cloud.google.com/) → 프로젝트 생성
 2. Google Drive API 활성화
-3. OAuth 2.0 클라이언트 ID 발급 (데스크톱 앱)
+3. OAuth 2.0 클라이언트 ID 발급 (데스크탑 앱)
 4. `credentials.json` 다운로드 → `backend/` 폴더에 저장
 5. 첫 실행 시 브라우저 인증 → `token.json` 자동 생성
 
@@ -186,17 +183,20 @@ options:
 
 ## 개발 로드맵
 
-- [x] Phase 1: CLI 파이프라인
+- [x] v0.1.0: CLI 파이프라인
   - [x] YouTube / Google Drive / 로컬 파일 지원
   - [x] Whisper STT (CUDA)
   - [x] Gemini 전처리 (중복제거 + 문단묶기)
   - [x] DeepL 번역
-  - [x] Gemini 화자 구분 (텍스트 기반, 이름 직접 지정)
+  - [x] Gemini 화자 구분 (텍스트 기반, 다중 화자)
   - [x] 다양한 출력 포맷 (TXT/SRT/Excel 화자별 색상)
   - [x] Gemini 요약 + 자동 제목
-- [ ] Phase 2: React + Electron UI
-  - [ ] 링크/파일 입력 UI
-  - [ ] 실시간 진행 상태 표시
-  - [ ] 출력 폴더/화자 설정
-- [ ] Phase 3: 패키징 (.exe 배포)
-- [ ] v0.2: Groq Whisper API 연동 (속도 개선)
+- [x] v0.2.0: Electron 데스크탑 앱
+  - [x] React 3패널 UI (사이드바/스크립트뷰/설정패널)
+  - [x] FastAPI 연동 (처리 시작 + 진행상태 polling)
+  - [x] 화자 동적 추가/삭제 UI
+  - [x] 완료 작업 자동 표시
+- [ ] v0.3.0: 성능 개선 + 웹 버전
+  - [ ] Groq/OpenAI Whisper API 연동 (속도 개선)
+  - [ ] CSS 다듬기
+  - [ ] Vercel + Railway 웹 배포
