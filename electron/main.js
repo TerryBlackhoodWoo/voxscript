@@ -1,6 +1,6 @@
 /**
- * VOXScript - Electron 메인 프로세스
- * 앱 시작 시 FastAPI 백엔드를 백그라운드로 띄우고 React UI를 창으로 표시
+ * VOXScript - Electron Main Process
+ * Launches FastAPI backend in background and displays React UI
  */
 
 const { app, BrowserWindow, ipcMain, dialog } = require("electron");
@@ -14,43 +14,46 @@ const DEV_MODE = process.env.NODE_ENV === "development";
 let mainWindow = null;
 let backendProcess = null;
 
-// ── 백엔드 시작 ──────────────────────────────────────────
+// ── Start Backend ─────────────────────────────────────────
 function startBackend() {
   const backendDir = path.join(__dirname, "..", "backend");
 
-  // 패키징 시: 동봉된 Python 인터프리터 사용
-  // 개발 시: 시스템 Python (venv 권장)
   const pythonCmd = app.isPackaged
     ? path.join(process.resourcesPath, "python", "python.exe")
     : "python";
 
   const scriptPath = path.join(backendDir, "main.py");
 
-  console.log(`[Electron] 백엔드 시작: ${pythonCmd} ${scriptPath}`);
+  console.log(`[Electron] Backend starting: ${pythonCmd} ${scriptPath}`);
 
   backendProcess = spawn(pythonCmd, [scriptPath], {
     cwd: backendDir,
-    env: { ...process.env, VOXSCRIPT_PORT: String(API_PORT) },
+    env: {
+      ...process.env,
+      VOXSCRIPT_PORT: String(API_PORT),
+      PYTHONIOENCODING: 'utf-8',
+      PYTHONUTF8: '1',
+    },
     stdio: ["ignore", "pipe", "pipe"],
   });
 
   backendProcess.stdout.on("data", (data) => {
-    console.log(`[Backend] ${data.toString().trim()}`);
+    console.log(`[Backend] ${data.toString('utf-8').trim()}`);
   });
   backendProcess.stderr.on("data", (data) => {
-    console.error(`[Backend ERR] ${data.toString().trim()}`);
+    console.error(`[Backend ERR] ${data.toString('utf-8').trim()}`);
   });
   backendProcess.on("exit", (code) => {
-    console.log(`[Backend] 종료됨 (code: ${code})`);
+    console.log(`[Backend] Exited (code: ${code})`);
   });
 }
 
-// ── 백엔드 준비 대기 ─────────────────────────────────────
+// ── Wait for Backend ──────────────────────────────────────
 function waitForBackend(retries = 20, interval = 500) {
   return new Promise((resolve, reject) => {
     const check = (remaining) => {
       if (remaining <= 0) {
-        reject(new Error("백엔드 시작 시간 초과"));
+        reject(new Error("Backend startup timeout"));
         return;
       }
       const req = http.get(`http://127.0.0.1:${API_PORT}/`, (res) => {
@@ -64,13 +67,13 @@ function waitForBackend(retries = 20, interval = 500) {
   });
 }
 
-// ── 메인 창 생성 ─────────────────────────────────────────
+// ── Create Main Window ────────────────────────────────────
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 960,
-    height: 680,
-    minWidth: 720,
-    minHeight: 520,
+    width: 1200,
+    height: 760,
+    minWidth: 900,
+    minHeight: 600,
     title: "VOXScript",
     // icon: path.join(__dirname, "assets", "icon.png"),
     webPreferences: {
@@ -79,32 +82,30 @@ function createWindow() {
       nodeIntegration: false,
     },
     backgroundColor: "#0f1117",
-    show: false, // 로딩 완료 후 표시
+    show: false,
   });
 
   if (DEV_MODE) {
-    // 개발: Vite dev server
     mainWindow.loadURL("http://localhost:5173");
     mainWindow.webContents.openDevTools();
   } else {
     mainWindow.loadFile(path.join(__dirname, "..", "frontend", "dist", "index.html"));
-    mainWindow.webContents.openDevTools();  
+    mainWindow.webContents.openDevTools();
   }
 
   mainWindow.once("ready-to-show", () => mainWindow.show());
   mainWindow.on("closed", () => { mainWindow = null; });
 }
 
-// ── 앱 생명주기 ──────────────────────────────────────────
+// ── App Lifecycle ─────────────────────────────────────────
 app.whenReady().then(async () => {
   startBackend();
 
   try {
     await waitForBackend();
-    console.log("[Electron] 백엔드 준비 완료");
+    console.log("[Electron] Backend ready");
   } catch (e) {
-    console.error("[Electron] 백엔드 시작 실패:", e.message);
-    // 백엔드 없어도 창은 열기 (에러 표시)
+    console.error("[Electron] Backend startup failed:", e.message);
   }
 
   createWindow();
@@ -116,7 +117,7 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   if (backendProcess) {
-    console.log("[Electron] 백엔드 종료 중...");
+    console.log("[Electron] Stopping backend...");
     backendProcess.kill("SIGTERM");
   }
 });
@@ -125,18 +126,50 @@ app.on("activate", () => {
   if (mainWindow === null) createWindow();
 });
 
-// ── IPC: 파일 선택 다이얼로그 ────────────────────────────
+// ── IPC: File Dialog ──────────────────────────────────────
 ipcMain.handle("select-file", async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: "음원/영상 파일 선택",
+    title: "Select audio/video file",
     filters: [
-      { name: "미디어 파일", extensions: ["mp4", "mp3", "mkv", "mov", "avi", "wav", "m4a"] },
-      { name: "전체 파일", extensions: ["*"] },
+      { name: "Media files", extensions: ["mp4", "mp3", "mkv", "mov", "avi", "wav", "m4a"] },
+      { name: "All files", extensions: ["*"] },
     ],
     properties: ["openFile"],
   });
   return result.canceled ? null : result.filePaths[0];
 });
 
-// ── IPC: API 포트 전달 ────────────────────────────────────
+// ── IPC: API Port ─────────────────────────────────────────
 ipcMain.handle("get-api-port", () => API_PORT);
+
+// ── IPC: Pipeline ─────────────────────────────────────────
+ipcMain.handle("start-pipeline", async (event, settings) => {
+  try {
+    const response = await fetch(`http://127.0.0.1:${API_PORT}/process`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source: settings.sourceUrl,
+        language: settings.lang,
+        formats: [settings.format],
+        use_summary: !settings.noSummary,
+        diarize: settings.diarize,
+        speakers: settings.diarize ? settings.speakers : [],
+      }),
+    });
+    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    return await response.json();
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// ── IPC: Job Status ───────────────────────────────────────
+ipcMain.handle("get-status", async (event, jobId) => {
+  try {
+    const response = await fetch(`http://127.0.0.1:${API_PORT}/status/${jobId}`);
+    return await response.json();
+  } catch {
+    return { status: "error", error: "Connection failed" };
+  }
+});
