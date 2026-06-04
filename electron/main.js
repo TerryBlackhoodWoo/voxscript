@@ -87,8 +87,8 @@ function createWindow() {
     mainWindow.loadURL("http://localhost:5173");
     mainWindow.webContents.openDevTools();
   } else {
-    // 프로덕션: 빌드된 React
     mainWindow.loadFile(path.join(__dirname, "..", "frontend", "dist", "index.html"));
+    mainWindow.webContents.openDevTools();  
   }
 
   mainWindow.once("ready-to-show", () => mainWindow.show());
