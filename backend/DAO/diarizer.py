@@ -10,8 +10,7 @@ from dataclasses import dataclass
 
 def label_speakers(
     translated_segments,
-    speaker1: str = "인터뷰어",
-    speaker2: str = "인터뷰이",
+    speakers: list[str] = None,  # None이면 Gemini가 자동 추론
     progress_callback=None,
 ) -> dict[int, str]:
     """
@@ -50,7 +49,14 @@ def label_speakers(
     )
 
     # 1단계: 화자 역할 파악
+    # 사용자 지정 화자명이 있으면 힌트로 제공
+    speaker_hint = ""
+    if speakers:
+        names = ", ".join(f'"{s}"' for s in speakers)
+        speaker_hint = f"\n화자 이름 힌트 (가능하면 이 이름들 사용): {names}"
+
     role_prompt = f"""다음은 인터뷰/대화 영상의 번역 스크립트 중간 구간입니다.
+{speaker_hint}
 
 {sample}
 
@@ -60,11 +66,11 @@ def label_speakers(
 - 짧은 반응("맞아요", "그렇군요", "감사합니다") = 주로 인터뷰어
 - 긴 설명/이야기 = 주로 인터뷰이
 - 내레이션(3인칭으로 특정인 소개) = 별도 나레이터로 처리
+- 화자 수는 실제 대화 구조에 맞게 1명 이상으로 판단
 
 위 패턴을 바탕으로 JSON으로만 반환:
 {{"speaker_count": 2, "roles": {{"화자1": "인터뷰어", "화자2": "인터뷰이"}}, "pattern": "구분 근거 설명", "has_narration": false}}
-
-화자가 1명처럼 보여도 반드시 2명으로 분류하세요. JSON만 반환."""
+JSON만 반환."""
 
     try:
         response = client.models.generate_content(
@@ -83,10 +89,26 @@ def label_speakers(
     roles = role_info.get("roles", {})
     has_narration = role_info.get("has_narration", False)
     pattern = role_info.get("pattern", "")
+    speaker_count = role_info.get("speaker_count", 1)
 
-    # 사용자 지정 화자명 적용
-    interviewer = speaker1
-    interviewee = speaker2
+    # 화자가 1명이면 라벨링 불필요 (UNKNOWN 방지)
+    if speaker_count <= 1 and not speakers:
+        print("[Diarizer] Single speaker detected, skipping labeling")
+        return {}
+
+    # 사용자 지정 화자명 우선 적용, 없으면 Gemini 추론 결과 사용
+    if speakers:
+        role_list = speakers
+    else:
+        role_list = list(roles.values())
+
+    if len(role_list) < 2:
+        print("[Diarizer] Could not identify speakers")
+        return {}
+
+    interviewer = role_list[0]
+    interviewee = role_list[1]
+    extra_speakers = role_list[2:] if len(role_list) > 2 else []
 
     # 2단계: 청크별 화자 라벨링
     chunk_size = 100
@@ -103,14 +125,19 @@ def label_speakers(
             f"[{seg.index}] {seg.translated.strip()[:120]}" for seg in chunk
         )
 
+        all_speakers = [interviewer, interviewee] + extra_speakers
+        speakers_str = " 또는 ".join(f'"{s}"' for s in all_speakers)
+
         label_prompt = f"""화자 구분 기준:
 - {interviewer}: 질문, 짧은 반응, 대화 진행
 - {interviewee}: 긴 답변, 자신의 경험/의견 설명
-{f'- 나레이터: 3인칭으로 인물/상황 소개 (있는 경우)' if has_narration else ''}
+{f'- {", ".join(extra_speakers)}: 추가 화자' if extra_speakers else ''}
+{f'- 나레이터: 3인칭으로 인물/상황 소개' if has_narration else ''}
 패턴: {pattern}
 
 아래 각 세그먼트의 화자를 판단하세요.
-반드시 모든 index에 대해 "{interviewer}" 또는 "{interviewee}" 중 하나를 배정하세요.
+반드시 모든 index에 대해 {speakers_str} 중 하나를 배정하세요.
+확실하지 않으면 문맥상 가장 가능성 높은 화자로 배정 (UNKNOWN 사용 금지).
 
 세그먼트:
 {chunk_text}
