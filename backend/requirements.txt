@@ -1,0 +1,14 @@
+openai-whisper
+yt-dlp
+gdown
+deepl
+google-genai
+fastapi
+uvicorn[standard]
+pydantic
+openpyxl
+python-dotenv
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+google-api-python-clientcls
