@@ -11,8 +11,8 @@ import time
 from pathlib import Path
 
 DEFAULT_IMPORT_DIR = Path.home() / "Downloads" / "VOXScript" / "temp"
-CREDENTIALS_PATH = Path(__file__).parent / "credentials.json"
-TOKEN_PATH = Path(__file__).parent / "token.json"
+CREDENTIALS_PATH = Path(__file__).parent.parent / "credentials.json"
+TOKEN_PATH = Path(__file__).parent.parent / "token.json"
 
 GDRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
