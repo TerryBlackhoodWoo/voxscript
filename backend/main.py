@@ -2,6 +2,7 @@
 VOXScript - FastAPI 서버
 Electron에서 이 서버를 백그라운드로 띄우고 React UI와 통신
 """
+
 # uvicorn main:app --host 127.0.0.1 --port 8765 --reload
 
 import os
@@ -48,9 +49,8 @@ class ProcessRequest(BaseModel):
     use_summary: bool = True
     import_dir: Optional[str] = None
     export_dir: Optional[str] = None
-    diarize: bool = False           # ← 화자 구분
-    speaker1: str = "인터뷰어"      # ← 화자1 이름
-    speaker2: str = "인터뷰이"      # ← 화자2 이름
+    diarize: bool = False
+    speakers: list[str] = []  # ← speakers 리스트
 
 
 class JobStatus(BaseModel):
@@ -61,6 +61,7 @@ class JobStatus(BaseModel):
     files: list[str] = []
     summary: Optional[str] = None
     error: Optional[str] = None
+    log: list[str] = []  # ← 로그 추가
 
 
 @app.get("/")
@@ -83,14 +84,16 @@ def start_process(req: ProcessRequest):
     job_id = str(uuid.uuid4())[:8]
     jobs[job_id] = {
         "status": "pending",
-        "step": "대기 중",
+        "step": "Waiting...",
         "progress": 0,
         "files": [],
         "summary": None,
         "error": None,
+        "log": [],
     }
 
     import threading
+
     thread = threading.Thread(
         target=_run_pipeline,
         args=(job_id, req),
@@ -110,7 +113,6 @@ def get_status(job_id: str):
 
 @app.get("/jobs")
 def list_jobs():
-    """완료된 작업 목록 반환 (사이드바용)"""
     return [
         {"job_id": jid, **{k: v for k, v in job.items()}}
         for jid, job in jobs.items()
@@ -141,8 +143,25 @@ def _update(job_id: str, step: str, progress: int, **kwargs):
     jobs[job_id].update({"step": step, "progress": progress, **kwargs})
 
 
+def _log(job_id: str, msg: str):
+    """로그 추가 (최대 50줄 유지)"""
+    print(f"[VOXScript] {msg}")
+    logs = jobs[job_id].get("log", [])
+    logs.append(msg)
+    if len(logs) > 50:
+        logs = logs[-50:]
+    jobs[job_id]["log"] = logs
+
+
 def _run_pipeline(job_id: str, req: ProcessRequest):
     try:
+        import time as _time
+
+        total_start = _time.time()
+
+        def elapsed():
+            return f"{_time.time() - total_start:.1f}s"
+
         jobs[job_id]["status"] = "running"
         output_name = req.output_name or f"output_{job_id}"
 
@@ -151,48 +170,83 @@ def _run_pipeline(job_id: str, req: ProcessRequest):
 
         # Step 1: 다운로드
         _update(job_id, "Downloading audio...", 5)
+        _log(job_id, f"[1/5] Downloading: {req.source[:60]}...")
+        t = _time.time()
         audio_path = download_audio(
             req.source,
             output_name,
             import_dir=Path(req.import_dir) if req.import_dir else None,
         )
         _update(job_id, "Download complete", 20)
+        _log(
+            job_id,
+            f"[1/5] Download complete [{_time.time()-t:.1f}s] → {audio_path.name}",
+        )
 
         # Step 2: STT
-        _update(job_id, "음성 인식 중... (Whisper)", 25)
+        _update(job_id, "Whisper STT...", 25)
+        _log(
+            job_id,
+            f"[2/5] Whisper STT starting (lang: {req.language}, model: {req.model_size})",
+        )
+        t = _time.time()
         transcribe_result = transcribe(
             str(audio_path),
             language=req.language,
             model_size=req.model_size,
             progress_callback=progress,
         )
-        _update(job_id, "음성 인식 완료", 60)
+        _update(job_id, "STT complete", 60)
+        _log(
+            job_id,
+            f"[2/5] STT complete [{_time.time()-t:.1f}s] → {len(transcribe_result.segments)} segments, lang={transcribe_result.detected_language}",
+        )
 
         # Step 3: Gemini 전처리
-        _update(job_id, "전처리 중... (Gemini)", 61)
+        _update(job_id, "Gemini preprocessing...", 61)
+        _log(
+            job_id,
+            f"[3/5] Gemini preprocessing ({len(transcribe_result.segments)} segments)...",
+        )
+        t = _time.time()
         cleaned_result = clean(
             transcribe_result,
             progress_callback=progress,
         )
-        _update(job_id, "전처리 완료", 80)
+        _update(job_id, "Preprocessing complete", 80)
+        _log(
+            job_id,
+            f"[3/5] Preprocessing complete [{_time.time()-t:.1f}s] → {cleaned_result.cleaned_count} segments ({cleaned_result.original_count - cleaned_result.cleaned_count} removed)",
+        )
 
         # Step 4: 번역
-        _update(job_id, "번역 중... (DeepL)", 81)
+        _update(job_id, "DeepL translating...", 81)
+        _log(
+            job_id,
+            f"[4/5] DeepL translating ({cleaned_result.cleaned_count} segments)...",
+        )
+        t = _time.time()
         translation_result = translate(
             cleaned_result,
             target_lang=req.target_language,
             progress_callback=progress,
         )
-        _update(job_id, "번역 완료", 93)
+        _update(job_id, "Translation complete", 93)
+        _log(job_id, f"[4/5] Translation complete [{_time.time()-t:.1f}s]")
 
         # Step 4.5: 화자 구분 (선택)
         if req.diarize:
-            _update(job_id, "화자 구분 중... (Gemini)", 94)
+            _update(job_id, "Speaker diarization...", 94)
+            _log(
+                job_id,
+                f"[4.5] Speaker diarization (speakers: {req.speakers or 'auto'})...",
+            )
+            t = _time.time()
             from DAO.diarizer import label_speakers
+
             speaker_map = label_speakers(
                 translation_result.segments,
-                speaker1=req.speaker1,
-                speaker2=req.speaker2,
+                speakers=req.speakers if req.speakers else None,
                 progress_callback=progress,
             )
             if speaker_map:
@@ -201,9 +255,17 @@ def _run_pipeline(job_id: str, req: ProcessRequest):
                     if label:
                         seg.original = f"[{label}] {seg.original}"
                         seg.translated = f"[{label}] {seg.translated}"
+                _log(
+                    job_id,
+                    f"[4.5] Diarization complete [{_time.time()-t:.1f}s] → {len(speaker_map)} segments labeled",
+                )
+            else:
+                _log(job_id, f"[4.5] Diarization skipped (single speaker or failed)")
 
         # Step 5: 저장
         _update(job_id, "Saving files...", 95)
+        _log(job_id, f"[5/5] Saving files (formats: {req.formats})...")
+        t = _time.time()
         format_result = format_and_save(
             translation_result,
             output_name=output_name,
@@ -214,20 +276,29 @@ def _run_pipeline(job_id: str, req: ProcessRequest):
         )
 
         filenames = [Path(f).name for f in format_result.saved_files]
+        total_elapsed = _time.time() - total_start
+        m, s = divmod(int(total_elapsed), 60)
+
+        _log(job_id, f"[5/5] Saved {len(filenames)} files [{t:.1f}s]")
+        _log(job_id, f"✅ Done! Total: {m}m {s}s")
 
         _update(
-            job_id, "완료!", 100,
+            job_id,
+            "Done!",
+            100,
             status="done",
             files=filenames,
             summary=format_result.claude_summary,
         )
 
     except Exception as e:
-        _update(job_id, f"오류: {e}", 0, status="error", error=str(e))
+        _log(job_id, f"❌ Error: {e}")
+        _update(job_id, f"Error: {e}", 0, status="error", error=str(e))
 
 
 if __name__ == "__main__":
     import uvicorn
+
     port = int(os.environ.get("VOXSCRIPT_PORT", 8765))
-    print(f"[VOXScript] API 서버 시작: http://localhost:{port}")
+    print(f"[VOXScript] API server starting: http://localhost:{port}")
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
