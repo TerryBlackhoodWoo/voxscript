@@ -3,7 +3,7 @@ VOXScript - CLI 메인 파이프라인
 사용법: python pipeline.py [소스] [옵션]
 
 예시:
-  python pipeline.py "https://drive.google.com/file/d/..." 
+  python pipeline.py "https://drive.google.com/file/d/..."
   python pipeline.py "https://www.youtube.com/watch?v=..."
   python pipeline.py "./video.mp4" --lang es --format excel
   python pipeline.py "./video.mp4" --format all
@@ -55,8 +55,7 @@ def run(
     export_dir: str = None,
     diarize: bool = False,
     num_speakers: int | None = None,
-    speaker1: str = "인터뷰어",
-    speaker2: str = "인터뷰이",
+    speakers: list[str] = None,  # ["인터뷰어", "인터뷰이"] 등
 ):
     if formats is None:
         formats = ["txt_bilingual", "srt_bilingual"]
@@ -64,6 +63,7 @@ def run(
     # 출력 파일명 자동 생성
     if output_name is None:
         import re, time
+
         if os.path.exists(source):
             # 로컬 파일 → 파일명 그대로
             output_name = Path(source).stem
@@ -74,7 +74,9 @@ def run(
                 output_name = yt_match.group(1)
             else:
                 # Google Drive 폴더/파일 ID
-                gdrive_match = re.search(r"/(?:folders|file/d)/([a-zA-Z0-9_-]+)", source)
+                gdrive_match = re.search(
+                    r"/(?:folders|file/d)/([a-zA-Z0-9_-]+)", source
+                )
                 if gdrive_match:
                     output_name = gdrive_match.group(1)
                 else:
@@ -94,6 +96,7 @@ def run(
 
     try:
         import time as _time
+
         total_start = _time.time()
 
         def elapsed(start):
@@ -102,7 +105,9 @@ def run(
         # ── Step 1: 다운로드 ──────────────────────────────
         t = _time.time()
         progress("Downloading audio...", 5)
-        audio_path = download_audio(source, output_name, import_dir=Path(import_dir) if import_dir else None)
+        audio_path = download_audio(
+            source, output_name, import_dir=Path(import_dir) if import_dir else None
+        )
         progress("Download complete", 20)
         print(f"\n  -> audio: {audio_path}  [{elapsed(t)}]")
 
@@ -116,7 +121,9 @@ def run(
             progress_callback=progress,
         )
         progress("STT complete", 60)
-        print(f"\n  -> segments: {len(transcribe_result.segments)} (raw)  [{elapsed(t)}]")
+        print(
+            f"\n  -> segments: {len(transcribe_result.segments)} (raw)  [{elapsed(t)}]"
+        )
         print(f"  -> language: {transcribe_result.detected_language}")
 
         # ── Step 3: Gemini 전처리 (중복 제거 + 문단 묶기) ──
@@ -127,8 +134,10 @@ def run(
             progress_callback=progress,
         )
         progress("Cleaning complete", 80)
-        print(f"\n  -> cleaned: {cleaned_result.cleaned_count} "
-              f"({cleaned_result.original_count - cleaned_result.cleaned_count} removed)  [{elapsed(t)}]")
+        print(
+            f"\n  -> cleaned: {cleaned_result.cleaned_count} "
+            f"({cleaned_result.original_count - cleaned_result.cleaned_count} removed)  [{elapsed(t)}]"
+        )
 
         # ── Step 4: DeepL 번역 ────────────────────────────
         print()
@@ -139,17 +148,19 @@ def run(
             progress_callback=progress,
         )
         progress("Translation complete", 93)
-        print(f"\n  -> translated: {len(translation_result.segments)} segments  [{elapsed(t)}]")
+        print(
+            f"\n  -> translated: {len(translation_result.segments)} segments  [{elapsed(t)}]"
+        )
         print()
 
         # ── Step 4.5: Gemini 텍스트 기반 화자 구분 (선택) ──
         if diarize:
             t = _time.time()
             from DAO.diarizer import label_speakers
+
             speaker_map = label_speakers(
                 translation_result.segments,
-                speaker1=speaker1,
-                speaker2=speaker2,
+                speakers=speakers,
                 progress_callback=progress,
             )
             if speaker_map:
@@ -158,7 +169,9 @@ def run(
                     if label:
                         seg.original = f"[{label}] {seg.original}"
                         seg.translated = f"[{label}] {seg.translated}"
-                print(f"  -> speaker labels applied: {len(speaker_map)} segments  [{elapsed(t)}]")
+                print(
+                    f"  -> speaker labels applied: {len(speaker_map)} segments  [{elapsed(t)}]"
+                )
 
         # ── Step 5: 포맷 & 저장 ───────────────────────────
         print()
@@ -199,53 +212,57 @@ def main():
     parser = argparse.ArgumentParser(
         description="VOXScript - 음원/영상 → 번역 스크립트 변환기"
     )
-    parser.add_argument("source", help="Google Drive URL / YouTube URL / 로컬 파일 경로")
     parser.add_argument(
-        "--lang", default="auto",
+        "source", help="Google Drive URL / YouTube URL / 로컬 파일 경로"
+    )
+    parser.add_argument(
+        "--lang",
+        default="auto",
         choices=list(SUPPORTED_LANGUAGES.keys()),
-        help=f"원본 언어 (기본: auto). 선택지: {', '.join(SUPPORTED_LANGUAGES.keys())}"
+        help=f"원본 언어 (기본: auto). 선택지: {', '.join(SUPPORTED_LANGUAGES.keys())}",
     )
     parser.add_argument(
-        "--target", default="KO",
+        "--target",
+        default="KO",
         choices=list(TARGET_LANGUAGES.keys()),
-        help="번역 타겟 언어 (기본: KO 한국어)"
+        help="번역 타겟 언어 (기본: KO 한국어)",
     )
     parser.add_argument(
-        "--format", default="txt_bilingual,srt_bilingual",
-        help=f"출력 포맷 (콤마 구분). 선택지: {', '.join(OUTPUT_FORMATS.keys())}"
+        "--format",
+        default="txt_bilingual,srt_bilingual",
+        help=f"출력 포맷 (콤마 구분). 선택지: {', '.join(OUTPUT_FORMATS.keys())}",
     )
     parser.add_argument(
-        "--name", default=None,
-        help="출력 파일명 (기본: 소스명 자동 추출)"
+        "--name", default=None, help="출력 파일명 (기본: 소스명 자동 추출)"
     )
     parser.add_argument(
-        "--model", default="medium",
+        "--model",
+        default="medium",
         choices=["tiny", "base", "small", "medium", "large"],
-        help="Whisper 모델 크기 (기본: medium)"
+        help="Whisper 모델 크기 (기본: medium)",
     )
     parser.add_argument(
-        "--import-dir", default=None,
-        help="Temp folder for downloaded audio (default: ~/Downloads/VOXScript/temp)"
+        "--import-dir",
+        default=None,
+        help="Temp folder for downloaded audio (default: ~/Downloads/VOXScript/temp)",
     )
     parser.add_argument(
-        "--export-dir", default=None,
-        help="Output folder for result files (default: ~/Downloads/VOXScript/output)"
+        "--export-dir",
+        default=None,
+        help="Output folder for result files (default: ~/Downloads/VOXScript/output)",
+    )
+    parser.add_argument("--no-summary", action="store_true", help="Skip Gemini summary")
+    parser.add_argument(
+        "--diarize",
+        action="store_true",
+        help="Enable speaker diarization via Gemini text analysis",
     )
     parser.add_argument(
-        "--no-summary", action="store_true",
-        help="Skip Gemini summary"
-    )
-    parser.add_argument(
-        "--diarize", action="store_true",
-        help="Enable speaker diarization via Gemini text analysis"
-    )
-    parser.add_argument(
-        "--speaker1", default="인터뷰어",
-        help="Speaker 1 label (default: 인터뷰어)"
-    )
-    parser.add_argument(
-        "--speaker2", default="인터뷰이",
-        help="Speaker 2 label (default: 인터뷰이)"
+        "--speakers",
+        nargs="+",
+        default=None,
+        metavar="NAME",
+        help="Speaker names (e.g. --speakers 진행자 젠슨황 게스트)",
     )
 
     args = parser.parse_args()
@@ -263,8 +280,7 @@ def main():
         export_dir=args.export_dir,
         diarize=args.diarize,
         num_speakers=None,
-        speaker1=args.speaker1,
-        speaker2=args.speaker2,
+        speakers=args.speakers,
     )
 
 
