@@ -102,8 +102,9 @@ JSON만 반환."""
     else:
         role_list = list(roles.values())
 
+    # 화자 1명이면 라벨링 불필요
     if len(role_list) < 2:
-        print("[Diarizer] Could not identify speakers")
+        print(f"[Diarizer] Only {len(role_list)} speaker(s), skipping labeling")
         return {}
 
     interviewer = role_list[0]
@@ -111,7 +112,7 @@ JSON만 반환."""
     extra_speakers = role_list[2:] if len(role_list) > 2 else []
 
     # 2단계: 청크별 화자 라벨링
-    chunk_size = 100
+    chunk_size = 50  # 100 → 50 (파싱 안정성 향상)
     result: dict[int, str] = {}
 
     for chunk_start in range(0, total, chunk_size):
@@ -145,20 +146,31 @@ JSON만 반환."""
 JSON만 반환 (index는 문자열):
 {{"0": "{interviewee}", "1": "{interviewer}", ...}}"""
 
-        try:
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=label_prompt,
-            )
-            label_text = (
-                response.text.strip().replace("```json", "").replace("```", "").strip()
-            )
-            chunk_labels = json.loads(label_text)
-            for idx_str, label in chunk_labels.items():
-                result[int(idx_str)] = label
-        except Exception as e:
-            print(f"[Diarizer] Chunk labeling failed ({chunk_start}): {e}")
-            continue
+        # 재시도 로직 (최대 2회)
+        for attempt in range(2):
+            try:
+                response = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=label_prompt,
+                )
+                label_text = (
+                    response.text.strip()
+                    .replace("```json", "")
+                    .replace("```", "")
+                    .strip()
+                )
+                chunk_labels = json.loads(label_text)
+                for idx_str, label in chunk_labels.items():
+                    result[int(idx_str)] = label
+                break  # 성공시 재시도 중단
+            except Exception as e:
+                if attempt == 0:
+                    print(f"[Diarizer] Chunk {chunk_start} failed, retrying... ({e})")
+                else:
+                    print(f"[Diarizer] Chunk {chunk_start} failed after retry: {e}")
+                    # 실패한 청크는 인터뷰이로 기본값
+                    for seg in chunk:
+                        result[seg.index] = interviewee
 
     labeled = sum(1 for v in result.values() if v != "")
     print(f"[Diarizer] Labeled {labeled}/{total} segments")
