@@ -2,8 +2,8 @@
 VOXScript - FastAPI 서버
 Electron에서 이 서버를 백그라운드로 띄우고 React UI와 통신
 """
+# uvicorn main:app --host 127.0.0.1 --port 8765 --reload
 
-import asyncio
 import os
 import sys
 import uuid
@@ -18,7 +18,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# 백엔드 모듈 경로 추가
 sys.path.insert(0, str(Path(__file__).parent))
 
 from DAO.downloader import download_audio
@@ -31,16 +30,14 @@ app = FastAPI(title="VOXScript API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Electron에서 접근 허용
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ── 작업 상태 저장 (메모리) ─────────────────────────────
 jobs: dict[str, dict] = {}
 
 
-# ── 요청 모델 ───────────────────────────────────────────
 class ProcessRequest(BaseModel):
     source: str
     language: str = "auto"
@@ -49,21 +46,23 @@ class ProcessRequest(BaseModel):
     output_name: Optional[str] = None
     model_size: str = "medium"
     use_summary: bool = True
-    import_dir: Optional[str] = None   # None = ~/Downloads/VOXScript/temp
-    export_dir: Optional[str] = None   # None = ~/Downloads/VOXScript/output
+    import_dir: Optional[str] = None
+    export_dir: Optional[str] = None
+    diarize: bool = False           # ← 화자 구분
+    speaker1: str = "인터뷰어"      # ← 화자1 이름
+    speaker2: str = "인터뷰이"      # ← 화자2 이름
 
 
 class JobStatus(BaseModel):
     job_id: str
-    status: str      # pending / running / done / error
+    status: str
     step: str
-    progress: int    # 0~100
+    progress: int
     files: list[str] = []
     summary: Optional[str] = None
     error: Optional[str] = None
 
 
-# ── 엔드포인트 ─────────────────────────────────────────
 @app.get("/")
 def root():
     return {"status": "ok", "service": "VOXScript API"}
@@ -71,10 +70,7 @@ def root():
 
 @app.get("/languages")
 def get_languages():
-    return {
-        "source": SUPPORTED_LANGUAGES,
-        "target": TARGET_LANGUAGES,
-    }
+    return {"source": SUPPORTED_LANGUAGES, "target": TARGET_LANGUAGES}
 
 
 @app.get("/formats")
@@ -84,7 +80,6 @@ def get_formats():
 
 @app.post("/process", response_model=JobStatus)
 def start_process(req: ProcessRequest):
-    """비동기 처리 시작 → job_id 반환"""
     job_id = str(uuid.uuid4())[:8]
     jobs[job_id] = {
         "status": "pending",
@@ -95,7 +90,6 @@ def start_process(req: ProcessRequest):
         "error": None,
     }
 
-    # 백그라운드 태스크로 처리
     import threading
     thread = threading.Thread(
         target=_run_pipeline,
@@ -114,9 +108,18 @@ def get_status(job_id: str):
     return JobStatus(job_id=job_id, **jobs[job_id])
 
 
+@app.get("/jobs")
+def list_jobs():
+    """완료된 작업 목록 반환 (사이드바용)"""
+    return [
+        {"job_id": jid, **{k: v for k, v in job.items()}}
+        for jid, job in jobs.items()
+        if job["status"] == "done"
+    ]
+
+
 @app.get("/download/{job_id}/{filename}")
 def download_file(job_id: str, filename: str):
-    """처리된 파일 다운로드"""
     file_path = Path("./output") / filename
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File not found")
@@ -134,7 +137,6 @@ def delete_job(job_id: str):
     return {"deleted": job_id}
 
 
-# ── 파이프라인 실행 (스레드) ────────────────────────────
 def _update(job_id: str, step: str, progress: int, **kwargs):
     jobs[job_id].update({"step": step, "progress": progress, **kwargs})
 
@@ -166,8 +168,8 @@ def _run_pipeline(job_id: str, req: ProcessRequest):
         )
         _update(job_id, "음성 인식 완료", 60)
 
-        # Step 3: Claude 전처리
-        _update(job_id, "전처리 중... (Claude - 중복 제거/문단 묶기)", 61)
+        # Step 3: Gemini 전처리
+        _update(job_id, "전처리 중... (Gemini)", 61)
         cleaned_result = clean(
             transcribe_result,
             progress_callback=progress,
@@ -183,8 +185,25 @@ def _run_pipeline(job_id: str, req: ProcessRequest):
         )
         _update(job_id, "번역 완료", 93)
 
+        # Step 4.5: 화자 구분 (선택)
+        if req.diarize:
+            _update(job_id, "화자 구분 중... (Gemini)", 94)
+            from DAO.diarizer import label_speakers
+            speaker_map = label_speakers(
+                translation_result.segments,
+                speaker1=req.speaker1,
+                speaker2=req.speaker2,
+                progress_callback=progress,
+            )
+            if speaker_map:
+                for seg in translation_result.segments:
+                    label = speaker_map.get(seg.index, "")
+                    if label:
+                        seg.original = f"[{label}] {seg.original}"
+                        seg.translated = f"[{label}] {seg.translated}"
+
         # Step 5: 저장
-        _update(job_id, "Saving files...", 94)
+        _update(job_id, "Saving files...", 95)
         format_result = format_and_save(
             translation_result,
             output_name=output_name,
@@ -194,7 +213,6 @@ def _run_pipeline(job_id: str, req: ProcessRequest):
             progress_callback=progress,
         )
 
-        # 파일명만 추출 (경로 제거)
         filenames = [Path(f).name for f in format_result.saved_files]
 
         _update(
