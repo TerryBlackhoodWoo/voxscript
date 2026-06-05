@@ -1,13 +1,11 @@
 """
-VOXScript - FastAPI 서버
-Electron에서 이 서버를 백그라운드로 띄우고 React UI와 통신
+VOXScript - FastAPI 서버 v0.4.0
+단계별 파이프라인 + 프로젝트 파일 기반
 """
-
-# uvicorn main:app --host 127.0.0.1 --port 8765 --reload
 
 import os
 import sys
-import uuid
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -20,18 +18,27 @@ from dotenv import load_dotenv
 load_dotenv()
 
 sys.path.insert(0, str(Path(__file__).parent))
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
 
+from project_schema import (
+    VoxProject,
+    PipelineStage,
+    ProjectSettings,
+    SegmentData,
+    new_project,
+    save_project,
+    load_project,
+    list_projects,
+    DEFAULT_PROJECTS_DIR,
+)
 from DAO.downloader import download_audio
 from DAO.transcriber import transcribe, SUPPORTED_LANGUAGES
 from DAO.cleaner import clean
 from DAO.translator import translate, TARGET_LANGUAGES
 from DAO.formatter import format_and_save, OUTPUT_FORMATS
-import sys
 
-sys.stdout.reconfigure(line_buffering=True)
-sys.stderr.reconfigure(line_buffering=True)
-
-app = FastAPI(title="VOXScript API", version="0.1.0")
+app = FastAPI(title="VOXScript API", version="0.4.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -40,37 +47,100 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-jobs: dict[str, dict] = {}
+# 메모리 내 프로젝트 캐시 (project_id → VoxProject)
+projects: dict[str, VoxProject] = {}
+# 로그 캐시
+logs: dict[str, list[str]] = {}
 
 
-class ProcessRequest(BaseModel):
+# ── 요청 모델 ───────────────────────────────────────────
+
+
+class StartRequest(BaseModel):
     source: str
-    language: str = "auto"
-    target_language: str = "KO"
-    formats: list[str] = ["txt_bilingual", "srt_bilingual"]
-    output_name: Optional[str] = None
+    lang: str = "auto"
+    target_lang: str = "KO"
+    format: str = "all"
     model_size: str = "medium"
     use_summary: bool = True
-    import_dir: Optional[str] = None
-    export_dir: Optional[str] = None
-    diarize: bool = False
-    speakers: list[str] = []  # ← speakers 리스트
 
 
-class JobStatus(BaseModel):
-    job_id: str
-    status: str
-    step: str
-    progress: int
-    files: list[str] = []
-    summary: Optional[str] = None
-    error: Optional[str] = None
-    log: list[str] = []  # ← 로그 추가
+class ResumeRequest(BaseModel):
+    labeled_segments: list[dict]  # [{index, speaker}] 유저가 라벨링한 것들
+
+
+class SaveRequest(BaseModel):
+    export_dir: Optional[str] = None  # None = 기본 경로
+    formats: Optional[list[str]] = None  # None = 프로젝트 설정 따름
+
+
+# ── 응답 모델 ───────────────────────────────────────────
+
+
+class ProjectStatus(BaseModel):
+    project_id: str
+    original_name: str
+    stage: str
+    stage_progress: int
+    segments: list[dict] = []
+    detected_language: str = ""
+    summary: str = ""
+    error_msg: str = ""
+    log: list[str] = []
+    is_done: bool = False
+
+
+# ── 헬퍼 ───────────────────────────────────────────────
+
+
+def _log(project_id: str, msg: str):
+    print(f"[VOXScript] {msg}", flush=True)
+    if project_id not in logs:
+        logs[project_id] = []
+    logs[project_id].append(msg)
+    if len(logs[project_id]) > 100:
+        logs[project_id] = logs[project_id][-100:]
+
+
+def _update_stage(project: VoxProject, stage: PipelineStage, progress: int = 0):
+    project.stage = stage
+    project.stage_progress = progress
+    save_project(project)
+
+
+def _project_to_status(project: VoxProject) -> ProjectStatus:
+    segs = [
+        {
+            "index": seg.index,
+            "start": seg.start,
+            "end": seg.end,
+            "text": seg.text,
+            "translated": seg.translated,
+            "speaker": seg.speaker,
+            "speaker_confirmed": seg.speaker_confirmed,
+        }
+        for seg in project.segments
+    ]
+    return ProjectStatus(
+        project_id=project.project_id,
+        original_name=project.original_name,
+        stage=project.stage.value,
+        stage_progress=project.stage_progress,
+        segments=segs,
+        detected_language=project.detected_language,
+        summary=project.summary,
+        error_msg=project.error_msg,
+        log=logs.get(project.project_id, []),
+        is_done=project.stage == PipelineStage.DONE,
+    )
+
+
+# ── 엔드포인트 ─────────────────────────────────────────
 
 
 @app.get("/")
 def root():
-    return {"status": "ok", "service": "VOXScript API"}
+    return {"status": "ok", "service": "VOXScript API", "version": "0.4.0"}
 
 
 @app.get("/languages")
@@ -83,224 +153,379 @@ def get_formats():
     return OUTPUT_FORMATS
 
 
-@app.post("/process", response_model=JobStatus)
-def start_process(req: ProcessRequest):
-    job_id = str(uuid.uuid4())[:8]
-    jobs[job_id] = {
-        "status": "pending",
-        "step": "Waiting...",
-        "progress": 0,
-        "files": [],
-        "summary": None,
-        "error": None,
-        "log": [],
-    }
+@app.get("/projects")
+def get_projects():
+    """저장된 프로젝트 목록 (사이드바용)"""
+    return list_projects(DEFAULT_PROJECTS_DIR)
 
-    import threading
+
+@app.post("/start", response_model=ProjectStatus)
+def start_pipeline(req: StartRequest):
+    """1~3단계 실행: 다운로드 → STT → Gemini 전처리 → labeling 대기"""
+    settings = ProjectSettings(
+        source=req.source,
+        lang=req.lang,
+        target_lang=req.target_lang,
+        format=req.format,
+        model_size=req.model_size,
+        use_summary=req.use_summary,
+    )
+    project = new_project(req.source, f"project_{len(projects)+1:03d}", settings)
+    projects[project.project_id] = project
+    logs[project.project_id] = []
 
     thread = threading.Thread(
-        target=_run_pipeline,
-        args=(job_id, req),
+        target=_run_stage1,
+        args=(project.project_id,),
         daemon=True,
     )
     thread.start()
 
-    return JobStatus(job_id=job_id, **jobs[job_id])
+    return _project_to_status(project)
 
 
-@app.get("/status/{job_id}", response_model=JobStatus)
-def get_status(job_id: str):
-    if job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-    return JobStatus(job_id=job_id, **jobs[job_id])
+@app.get("/status/{project_id}", response_model=ProjectStatus)
+def get_status(project_id: str):
+    if project_id not in projects:
+        # 파일에서 로드 시도
+        vox_path = DEFAULT_PROJECTS_DIR / project_id / "project.vox"
+        if vox_path.exists():
+            projects[project_id] = load_project(vox_path)
+        else:
+            raise HTTPException(status_code=404, detail="Project not found")
+    return _project_to_status(projects[project_id])
 
 
-@app.get("/jobs")
-def list_jobs():
-    return [
-        {"job_id": jid, **{k: v for k, v in job.items()}}
-        for jid, job in jobs.items()
-        if job["status"] == "done"
-    ]
+@app.post("/resume/{project_id}", response_model=ProjectStatus)
+def resume_pipeline(project_id: str, req: ResumeRequest):
+    """2단계 완료: 라벨링 데이터 받아서 3~5단계 실행"""
+    if project_id not in projects:
+        raise HTTPException(status_code=404, detail="Project not found")
 
+    project = projects[project_id]
+    if project.stage != PipelineStage.LABELING:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Project is not in labeling stage (current: {project.stage.value})",
+        )
 
-@app.get("/download/{job_id}/{filename}")
-def download_file(job_id: str, filename: str):
-    file_path = Path("./output") / filename
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(
-        path=str(file_path),
-        filename=filename,
-        media_type="application/octet-stream",
+    # 유저 라벨링 반영
+    label_map = {item["index"]: item["speaker"] for item in req.labeled_segments}
+    for seg in project.segments:
+        if seg.index in label_map:
+            seg.speaker = label_map[seg.index]
+            seg.speaker_confirmed = True
+
+    save_project(project)
+
+    thread = threading.Thread(
+        target=_run_stage2,
+        args=(project_id,),
+        daemon=True,
     )
+    thread.start()
+
+    return _project_to_status(project)
 
 
-@app.delete("/job/{job_id}")
-def delete_job(job_id: str):
-    if job_id in jobs:
-        del jobs[job_id]
-    return {"deleted": job_id}
+@app.post("/save/{project_id}", response_model=ProjectStatus)
+def save_output(project_id: str, req: SaveRequest):
+    """5단계: 파일 저장"""
+    if project_id not in projects:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    project = projects[project_id]
+
+    thread = threading.Thread(
+        target=_run_stage3,
+        args=(project_id, req.export_dir, req.formats),
+        daemon=True,
+    )
+    thread.start()
+
+    return _project_to_status(project)
 
 
-def _update(job_id: str, step: str, progress: int, **kwargs):
-    jobs[job_id].update({"step": step, "progress": progress, **kwargs})
+@app.get("/load/{project_id}", response_model=ProjectStatus)
+def load_saved_project(project_id: str):
+    """저장된 프로젝트 이어하기"""
+    vox_path = DEFAULT_PROJECTS_DIR / project_id / "project.vox"
+    if not vox_path.exists():
+        # original_name으로 찾기
+        for p in DEFAULT_PROJECTS_DIR.glob("*/project.vox"):
+            try:
+                proj = load_project(p)
+                if proj.project_id == project_id:
+                    projects[project_id] = proj
+                    return _project_to_status(proj)
+            except:
+                continue
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    project = load_project(vox_path)
+    projects[project_id] = project
+    return _project_to_status(project)
 
 
-def _log(job_id: str, msg: str):
-    """로그 추가 (최대 50줄 유지)"""
-    print(f"[VOXScript] {msg}")
-    logs = jobs[job_id].get("log", [])
-    logs.append(msg)
-    if len(logs) > 50:
-        logs = logs[-50:]
-    jobs[job_id]["log"] = logs
+# ── 파이프라인 스테이지 ────────────────────────────────
 
 
-def _run_pipeline(job_id: str, req: ProcessRequest):
+def _run_stage1(project_id: str):
+    """1단계: 다운로드 → STT → Gemini 전처리 → labeling 대기"""
+    import time as _time
+
+    project = projects[project_id]
+
     try:
-        import time as _time
-
-        total_start = _time.time()
-
-        def elapsed():
-            return f"{_time.time() - total_start:.1f}s"
-
-        jobs[job_id]["status"] = "running"
-        output_name = req.output_name or f"output_{job_id}"
 
         def progress(step, pct):
-            _update(job_id, step, pct)
+            project.stage_progress = pct
 
         # Step 1: 다운로드
-        _update(job_id, "Downloading audio...", 5)
-        _log(job_id, f"[1/5] Downloading: {req.source[:60]}...")
+        _update_stage(project, PipelineStage.DOWNLOADING, 5)
+        _log(project_id, f"[1/3] Downloading: {project.settings.source[:60]}...")
         t = _time.time()
+
         audio_path, original_name = download_audio(
-            req.source,
-            output_name,
-            import_dir=Path(req.import_dir) if req.import_dir else None,
+            project.settings.source,
+            f"project_{project_id}",
         )
-        # 원본 파일명이 있으면 output_name 교체
         if original_name:
-            output_name = original_name
-        _update(job_id, "Download complete", 20)
+            project.original_name = original_name
+            # 프로젝트 폴더 재생성
+            from project_schema import DEFAULT_PROJECTS_DIR
+
+            new_dir = DEFAULT_PROJECTS_DIR / original_name
+            new_dir.mkdir(parents=True, exist_ok=True)
+            project.project_dir = str(new_dir)
+
+        project.audio_path = str(audio_path)
         _log(
-            job_id,
-            f"[1/5] Download complete [{_time.time()-t:.1f}s] → {audio_path.name} (original: {original_name})",
+            project_id,
+            f"[1/3] Download complete [{_time.time()-t:.1f}s] → {audio_path.name}",
         )
 
         # Step 2: STT
-        _update(job_id, "Whisper STT...", 25)
-        _log(
-            job_id,
-            f"[2/5] Whisper STT starting (lang: {req.language}, model: {req.model_size})",
-        )
+        _update_stage(project, PipelineStage.TRANSCRIBING, 25)
+        _log(project_id, f"[2/3] Whisper STT starting (lang: {project.settings.lang})")
         t = _time.time()
+
         transcribe_result = transcribe(
             str(audio_path),
-            language=req.language,
-            model_size=req.model_size,
+            language=project.settings.lang,
+            model_size=project.settings.model_size,
             progress_callback=progress,
         )
-        _update(job_id, "STT complete", 60)
+        project.detected_language = transcribe_result.detected_language
         _log(
-            job_id,
-            f"[2/5] STT complete [{_time.time()-t:.1f}s] → {len(transcribe_result.segments)} segments, lang={transcribe_result.detected_language}",
+            project_id,
+            f"[2/3] STT complete [{_time.time()-t:.1f}s] → {len(transcribe_result.segments)} segments, lang={transcribe_result.detected_language}",
         )
 
         # Step 3: Gemini 전처리
-        _update(job_id, "Gemini preprocessing...", 61)
+        _update_stage(project, PipelineStage.CLEANING, 61)
         _log(
-            job_id,
-            f"[3/5] Gemini preprocessing ({len(transcribe_result.segments)} segments)...",
+            project_id,
+            f"[3/3] Gemini preprocessing ({len(transcribe_result.segments)} segments)...",
         )
         t = _time.time()
-        cleaned_result = clean(
-            transcribe_result,
-            progress_callback=progress,
-        )
-        _update(job_id, "Preprocessing complete", 80)
+
+        cleaned_result = clean(transcribe_result, progress_callback=progress)
         _log(
-            job_id,
-            f"[3/5] Preprocessing complete [{_time.time()-t:.1f}s] → {cleaned_result.cleaned_count} segments ({cleaned_result.original_count - cleaned_result.cleaned_count} removed)",
+            project_id,
+            f"[3/3] Preprocessing complete [{_time.time()-t:.1f}s] → {cleaned_result.cleaned_count} segments",
         )
 
-        # Step 4: 번역
-        _update(job_id, "DeepL translating...", 81)
-        _log(
-            job_id,
-            f"[4/5] DeepL translating ({cleaned_result.cleaned_count} segments)...",
-        )
-        t = _time.time()
-        translation_result = translate(
-            cleaned_result,
-            target_lang=req.target_language,
-            progress_callback=progress,
-        )
-        _update(job_id, "Translation complete", 93)
-        _log(job_id, f"[4/5] Translation complete [{_time.time()-t:.1f}s]")
-
-        # Step 4.5: 화자 구분 (선택)
-        if req.diarize:
-            _update(job_id, "Speaker diarization...", 94)
-            _log(
-                job_id,
-                f"[4.5] Speaker diarization (speakers: {req.speakers or 'auto'})...",
+        # 세그먼트 저장
+        project.segments = [
+            SegmentData(
+                index=seg.index,
+                start=seg.start,
+                end=seg.end,
+                text=seg.text,
             )
-            t = _time.time()
-            from DAO.diarizer import label_speakers
+            for seg in cleaned_result.segments
+        ]
 
-            speaker_map = label_speakers(
-                translation_result.segments,
-                speakers=req.speakers if req.speakers else None,
-                progress_callback=progress,
-            )
-            if speaker_map:
-                for seg in translation_result.segments:
-                    label = speaker_map.get(seg.index, "")
-                    if label:
-                        seg.original = f"[{label}] {seg.original}"
-                        seg.translated = f"[{label}] {seg.translated}"
-                _log(
-                    job_id,
-                    f"[4.5] Diarization complete [{_time.time()-t:.1f}s] → {len(speaker_map)} segments labeled",
-                )
-            else:
-                _log(job_id, f"[4.5] Diarization skipped (single speaker or failed)")
-
-        # Step 5: 저장
-        _update(job_id, "Saving files...", 95)
-        _log(job_id, f"[5/5] Saving files (formats: {req.formats})...")
-        t = _time.time()
-        format_result = format_and_save(
-            translation_result,
-            output_name=output_name,
-            formats=req.formats,
-            export_dir=Path(req.export_dir) if req.export_dir else None,
-            use_claude_summary=req.use_summary,
-            progress_callback=progress,
-        )
-
-        filenames = [Path(f).name for f in format_result.saved_files]
-        total_elapsed = _time.time() - total_start
-        m, s = divmod(int(total_elapsed), 60)
-
-        _log(job_id, f"[5/5] Saved {len(filenames)} files [{t:.1f}s]")
-        _log(job_id, f"✅ Done! Total: {m}m {s}s")
-
-        _update(
-            job_id,
-            "Done!",
-            100,
-            status="done",
-            files=filenames,
-            summary=format_result.claude_summary,
-        )
+        # 2단계: 화자 라벨링 대기
+        _update_stage(project, PipelineStage.LABELING, 0)
+        _log(project_id, "⏸ Waiting for speaker labeling...")
 
     except Exception as e:
-        _log(job_id, f"❌ Error: {e}")
-        _update(job_id, f"Error: {e}", 0, status="error", error=str(e))
+        project.stage = PipelineStage.ERROR
+        project.error_msg = str(e)
+        save_project(project)
+        _log(project_id, f"❌ Error: {e}")
+
+
+def _run_stage2(project_id: str):
+    """3~4단계: 화자 자동 fill → 번역"""
+    import time as _time
+
+    project = projects[project_id]
+
+    try:
+
+        def progress(step, pct):
+            project.stage_progress = pct
+
+        # Step 3: 화자 자동 fill (Gemini)
+        confirmed = [s for s in project.segments if s.speaker_confirmed]
+        _log(
+            project_id,
+            f"[3] Speaker diarization ({len(confirmed)} confirmed labels)...",
+        )
+        _update_stage(project, PipelineStage.DIARIZING, 0)
+        t = _time.time()
+
+        if len(confirmed) > 0 or project.settings.speakers:
+            from DAO.diarizer import label_speakers
+            from DAO.translator import TranslatedSegment, TranslationResult
+
+            # 임시 TranslatedSegment 구조로 변환 (diarizer 입력용)
+            class TempSeg:
+                def __init__(self, seg):
+                    self.index = seg.index
+                    self.translated = seg.text
+
+            temp_segs = [TempSeg(s) for s in project.segments]
+            speaker_map = label_speakers(
+                temp_segs,
+                speakers=(
+                    project.settings.speakers if project.settings.speakers else None
+                ),
+                progress_callback=progress,
+            )
+
+            # 유저 확인 라벨 우선, 나머지는 Gemini 결과
+            for seg in project.segments:
+                if not seg.speaker_confirmed:
+                    label = speaker_map.get(seg.index, "")
+                    if label:
+                        seg.speaker = label
+
+        _log(project_id, f"[3] Diarization complete [{_time.time()-t:.1f}s]")
+
+        # Step 4: 번역
+        _update_stage(project, PipelineStage.TRANSLATING, 0)
+        src_lang = project.detected_language
+
+        if project.settings.target_lang == "KO" and src_lang.lower() in (
+            "ko",
+            "korean",
+        ):
+            _log(project_id, "[4] Korean source, skipping translation")
+            for seg in project.segments:
+                seg.translated = seg.text
+        else:
+            _log(
+                project_id,
+                f"[4] DeepL translating ({len(project.segments)} segments)...",
+            )
+            t = _time.time()
+
+            # CleanedResult 임시 구조 생성
+            from DAO.cleaner import CleanedResult, CleanedSegment
+
+            class TempCleaned:
+                def __init__(self, segs, lang):
+                    self.segments = [
+                        CleanedSegment(s.index, s.start, s.end, s.text) for s in segs
+                    ]
+                    self.detected_language = lang
+                    self.original_count = len(segs)
+                    self.cleaned_count = len(segs)
+
+            temp_cleaned = TempCleaned(project.segments, src_lang)
+            translation_result = translate(
+                temp_cleaned,
+                target_lang=project.settings.target_lang,
+                progress_callback=progress,
+            )
+
+            # 번역 결과 반영
+            trans_map = {
+                seg.index: seg.translated for seg in translation_result.segments
+            }
+            for seg in project.segments:
+                seg.translated = trans_map.get(seg.index, seg.text)
+
+            _log(project_id, f"[4] Translation complete [{_time.time()-t:.1f}s]")
+
+        # 저장 대기 상태로
+        _update_stage(project, PipelineStage.SAVING, 0)
+        _log(project_id, "⏸ Ready to save. Choose export path.")
+
+    except Exception as e:
+        project.stage = PipelineStage.ERROR
+        project.error_msg = str(e)
+        save_project(project)
+        _log(project_id, f"❌ Error: {e}")
+
+
+def _run_stage3(project_id: str, export_dir: str = None, formats: list = None):
+    """5단계: 파일 저장"""
+    import time as _time
+
+    project = projects[project_id]
+
+    try:
+        _log(project_id, "[5] Saving files...")
+        t = _time.time()
+
+        # TranslationResult 임시 구조 생성
+        from DAO.translator import TranslationResult, TranslatedSegment
+
+        trans_segs = []
+        for seg in project.segments:
+            # 화자 라벨 붙이기
+            orig = f"[{seg.speaker}] {seg.text}" if seg.speaker else seg.text
+            tran = (
+                f"[{seg.speaker}] {seg.translated}"
+                if seg.speaker and seg.translated
+                else (seg.translated or seg.text)
+            )
+
+            trans_segs.append(
+                TranslatedSegment(
+                    index=seg.index,
+                    start=seg.start,
+                    end=seg.end,
+                    original=orig,
+                    translated=tran,
+                )
+            )
+
+        translation_result = TranslationResult(
+            segments=trans_segs,
+            source_language=project.detected_language,
+            target_language=project.settings.target_lang,
+        )
+
+        fmt_list = formats or [project.settings.format]
+        export_path = Path(export_dir) if export_dir else None
+
+        format_result = format_and_save(
+            translation_result,
+            output_name=project.original_name,
+            formats=fmt_list,
+            export_dir=export_path,
+            use_claude_summary=project.settings.use_summary,
+        )
+
+        project.summary = format_result.claude_summary or ""
+        _update_stage(project, PipelineStage.DONE, 100)
+        _log(
+            project_id,
+            f"[5] Saved {len(format_result.saved_files)} files [{_time.time()-t:.1f}s]",
+        )
+        _log(project_id, f"✅ Done!")
+
+    except Exception as e:
+        project.stage = PipelineStage.ERROR
+        project.error_msg = str(e)
+        save_project(project)
+        _log(project_id, f"❌ Error: {e}")
 
 
 if __name__ == "__main__":
@@ -308,4 +533,4 @@ if __name__ == "__main__":
 
     port = int(os.environ.get("VOXSCRIPT_PORT", 8765))
     print(f"[VOXScript] API server starting: http://localhost:{port}", flush=True)
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")  # warning → info
+    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
