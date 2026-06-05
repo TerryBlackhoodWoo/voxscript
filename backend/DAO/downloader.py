@@ -1,6 +1,7 @@
 """
 VOXScript - Downloader
-Supports: YouTube URL / Google Drive file or folder link / local file
+Supports: Google Drive file or folder link / local file
+(YouTube removed due to cookie/size limitations)
 """
 
 import os
@@ -19,7 +20,7 @@ def is_youtube_url(url: str) -> bool:
     return bool(re.search(r"(youtube\.com|youtu\.be)", url))
 
 
-def is_gdrive_url(url: str) -> bool:
+def is_gdrive_url(url: str) -> bool:  # ← 이게 있어야 해요
     return bool(re.search(r"drive\.google\.com", url))
 
 
@@ -71,6 +72,7 @@ def _get_gdrive_service():
 def _gdrive_download_file(
     service, file_id: str, output_path: Path, mime_type: str = ""
 ) -> tuple[Path, str]:
+    """Drive API로 파일 다운로드 후 mp3 변환. (output_path, 원본파일명) 반환"""
     from googleapiclient.http import MediaIoBaseDownload
 
     meta = service.files().get(fileId=file_id, fields="name,mimeType").execute()
@@ -112,9 +114,12 @@ def _ext_from_mime(mime: str) -> str:
 
 
 def _sanitize_filename(name: str) -> str:
+    """파일명에서 특수문자 제거"""
+    import re
+
     name = re.sub(r'[\\/:*?"<>|]', "", name)
     name = name.strip().replace(" ", "_")
-    stem = Path(name).stem
+    stem = Path(name).stem  # 확장자 제거
     return stem[:50] if len(stem) > 50 else stem
 
 
@@ -125,7 +130,7 @@ def download_audio(
 ) -> tuple[Path, str]:
     """
     Returns:
-        (mp3_path, original_name)
+        (mp3_path, original_name) - 원본 파일명도 함께 반환
     """
     work_dir = Path(import_dir) if import_dir else DEFAULT_IMPORT_DIR
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -212,9 +217,23 @@ def download_audio(
 
     # ── YouTube ────────────────────────────────────────
     if is_youtube_url(source):
-        yt_match = re.search(r"(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})", source)
+        import re as _re
+
+        yt_match = _re.search(r"(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})", source)
         yt_id = yt_match.group(1) if yt_match else output_name
-        original_name = yt_id
+
+        # 영상 제목 추출
+        title_result = subprocess.run(
+            ["yt-dlp", "--get-title", source],
+            capture_output=True,
+            text=True,
+        )
+        if title_result.returncode == 0 and title_result.stdout.strip():
+            original_name = _sanitize_filename(title_result.stdout.strip())
+            print(f"[Downloader] YouTube title: {original_name}")
+        else:
+            original_name = yt_id
+            print(f"[Downloader] YouTube ID: {original_name}")
 
         print(f"[Downloader] YouTube audio extracting...")
         result = subprocess.run(
