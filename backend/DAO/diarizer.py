@@ -99,8 +99,10 @@ JSON만 반환."""
     # 사용자 지정 화자명 우선 적용, 없으면 Gemini 추론 결과 사용
     if speakers:
         role_list = speakers
+        print(f"[Diarizer] Using user-specified speakers: {role_list}")
     else:
         role_list = list(roles.values())
+        print(f"[Diarizer] Using Gemini-detected speakers: {role_list}")
 
     # 화자 1명이면 라벨링 불필요
     if len(role_list) < 2:
@@ -130,8 +132,8 @@ JSON만 반환."""
         speakers_str = " 또는 ".join(f'"{s}"' for s in all_speakers)
 
         label_prompt = f"""화자 구분 기준:
-- {interviewer}: 질문, 짧은 반응, 대화 진행
-- {interviewee}: 긴 답변, 자신의 경험/의견 설명
+- {interviewer}: 주로 질문하거나 짧게 반응하는 화자
+- {interviewee}: 주로 길게 답변하거나 설명하는 화자
 {f'- {", ".join(extra_speakers)}: 추가 화자' if extra_speakers else ''}
 {f'- 나레이터: 3인칭으로 인물/상황 소개' if has_narration else ''}
 패턴: {pattern}
