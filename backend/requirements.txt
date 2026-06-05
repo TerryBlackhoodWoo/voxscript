@@ -1,4 +1,5 @@
 openai-whisper
+openai
 yt-dlp
 gdown
 deepl
@@ -11,4 +12,4 @@ python-dotenv
 google-auth
 google-auth-oauthlib
 google-auth-httplib2
-google-api-python-clientcls
+google-api-python-client

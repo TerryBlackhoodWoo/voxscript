@@ -2,21 +2,21 @@
 
 > 음원/영상 링크 → STT → 번역 → 정리본 자동 생성 도구
 
-**Whisper(로컬 STT) + DeepL(번역) + Gemini(전처리/화자구분/요약)** 파이프라인으로  
+**Whisper API(STT) + DeepL(번역) + Gemini(전처리/화자구분/요약)** 파이프라인으로  
 YouTube / Google Drive / 로컬 파일을 자동으로 번역 스크립트로 변환합니다.
 
 ---
 
 ## 주요 기능
 
-- **다국어 STT** — Whisper medium (CUDA), 언어 자동 감지 또는 수동 지정
-- **중복 제거** — Gemini가 Whisper 슬라이딩 윈도우 중복 세그먼트 정리
-- **DeepL 번역** — 월 500,000자 무료 (한국어/영어/일본어 등)
-- **화자 구분** — Gemini 텍스트 분석 기반, 이름 직접 지정 + 3명 이상 지원
-- **다양한 출력 포맷** — TXT / SRT / Excel (화자별 색상 구분)
-- **자동 제목 추출** — Gemini가 내용 기반으로 파일명/폴더명 자동 생성
+- **다국어 STT** — OpenAI Whisper API (자동) / 로컬 Whisper CUDA (폴백), 언어 자동 감지
+- **중복 제거** — Gemini가 Whisper 슬라이딩 윈도우 중복 세그먼트 병렬 정리
+- **DeepL 번역** — 월 500,000자 무료 / 한국어 소스는 번역 자동 스킵
+- **화자 구분** — Gemini 텍스트 분석 기반, 자동 감지 or 이름 직접 지정 (3명 이상 지원)
+- **다양한 출력 포맷** — TXT / SRT / Excel (화자별 색상, 한국어 시 Translation 컬럼 생략)
+- **원본 파일명 기반 폴더 생성** — Google Drive / 로컬 / YouTube 원본명 그대로 저장
 - **Google Drive 연동** — 폴더 링크로 음원 직접 다운로드 (OAuth)
-- **Electron 데스크탑 앱** — React UI + FastAPI 백엔드 통합 (v0.2.0)
+- **Electron 데스크탑 앱** — React UI + FastAPI 백엔드 통합
 
 ---
 
@@ -27,13 +27,13 @@ VOXScript/
 ├── backend/
 │   ├── pipeline.py       ← CLI 진입점 (컨트롤러)
 │   ├── main.py           ← FastAPI 서버 (Electron 백엔드용)
-│   ├── cleaner.py        ← Gemini 전처리 (중복제거 + 문단묶기)
+│   ├── cleaner.py        ← Gemini 전처리 (중복제거 + 문단묶기, 병렬처리)
 │   ├── requirements.txt
 │   └── DAO/
-│       ├── downloader.py   ← YouTube / Google Drive / 로컬 파일
-│       ├── transcriber.py  ← Whisper STT (CUDA)
-│       ├── translator.py   ← DeepL 번역
-│       ├── diarizer.py     ← Gemini 화자 구분 (텍스트 기반)
+│       ├── downloader.py   ← YouTube / Google Drive / 로컬 파일 + 원본파일명 반환
+│       ├── transcriber.py  ← Whisper API / 로컬 CUDA 자동 선택 + 청크 분할
+│       ├── translator.py   ← DeepL 번역 (한국어 스킵)
+│       ├── diarizer.py     ← Gemini 화자 구분 (자동/수동, chunk_size=50, 재시도)
 │       └── formatter.py    ← 파일 저장 (TXT/SRT/Excel) + Gemini 요약
 ├── electron/
 │   ├── main.js           ← Electron 메인 (FastAPI 백그라운드 실행)
@@ -49,7 +49,7 @@ VOXScript/
 
 - Python 3.11
 - Node.js 18+
-- NVIDIA GPU (CUDA 12.1) — RTX 3060 이상 권장
+- NVIDIA GPU (CUDA 12.1) — RTX 3060 이상 권장 (로컬 Whisper 사용 시)
 - ffmpeg (PATH 등록 필요)
 
 ---
@@ -66,13 +66,19 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 cp .env.example .env
 # .env 파일 열어서 키 입력
 
-# YouTube
-python pipeline.py "https://www.youtube.com/watch?v=VIDEO_ID" --lang en --format all
+# Google Drive 폴더
+python pipeline.py "https://drive.google.com/drive/folders/FOLDER_ID" --lang en --format all
 
-# 화자 구분 (2명)
+# 로컬 파일
+python pipeline.py "./video.mp4" --lang ja --format all
+
+# 화자 구분 자동
+python pipeline.py "URL" --lang en --format all --diarize
+
+# 화자 이름 직접 지정
 python pipeline.py "URL" --lang en --format all --diarize --speakers 진행자 젠슨황
 
-# 화자 구분 (3명)
+# 화자 3명
 python pipeline.py "URL" --lang en --format all --diarize --speakers 진행자 게스트1 게스트2
 ```
 
@@ -82,10 +88,7 @@ python pipeline.py "URL" --lang en --format all --diarize --speakers 진행자 �
 # 루트에서
 npm install
 
-# 개발 모드 (Vite dev server + Electron)
-npm run dev
-
-# 프로덕션 빌드
+# 프로덕션 빌드 후 실행
 npm run build
 npm run electron
 ```
@@ -118,7 +121,7 @@ options:
 | `txt_bilingual` | 타임코드 + 원문 + 번역 텍스트 |
 | `srt` | 번역 SRT 자막 |
 | `srt_bilingual` | 원문/번역 병기 SRT |
-| `excel` | 타임코드/화자/원문/번역 Excel (화자별 색상) |
+| `excel` | 타임코드/화자/원문/번역 Excel (화자별 색상, 한국어 시 번역 컬럼 생략) |
 | `all` | 전부 저장 |
 
 ---
@@ -127,9 +130,11 @@ options:
 
 | 키 | 발급처 | 비용 |
 |---|---|---|
+| `OPENAI_API_KEY` | https://platform.openai.com | $0.006/분 (Whisper API) |
+| `GEMINI_API_KEY` | https://aistudio.google.com/ | 유료 (Google Cloud Console) |
 | `DEEPL_API_KEY` | https://www.deepl.com/ko/pro-api | 월 500,000자 무료 |
-| `GEMINI_API_KEY` | https://aistudio.google.com/ | 무료 (카드 불필요) |
 
+> `OPENAI_API_KEY` 없으면 로컬 Whisper CUDA 자동 사용  
 > Google Drive 연동 시 `credentials.json` 별도 필요
 
 ---
@@ -139,33 +144,36 @@ options:
 ```
 입력 (YouTube URL / Google Drive / 로컬 파일)
     ↓
-[1] 음원 추출 (yt-dlp / Google Drive API / ffmpeg)
+[1] 음원 추출 + 원본 파일명 추출 (yt-dlp / Google Drive API / ffmpeg, 64kbps)
     ↓
-[2] Whisper STT (로컬 CUDA, 언어 자동감지)
+[2] Whisper STT
+    ├── 24MB 이하 → OpenAI Whisper API (~10초/30분)
+    └── 24MB 초과 → 로컬 Whisper CUDA 폴백
     ↓
-[3] Gemini 전처리 (중복 제거 + 문단 묶기, chunk_size=150)
+[3] Gemini 전처리 (중복 제거 + 문단 묶기, chunk_size=150, 병렬처리)
     ↓
-[4] DeepL 번역
+[4] DeepL 번역 (한국어 소스면 스킵)
     ↓
-[4.5] Gemini 화자 구분 (선택, --diarize)
+[4.5] Gemini 화자 구분 (선택, 자동/수동, chunk_size=50, 재시도)
     ↓
-[5] 포맷 저장 + Gemini 요약 + 자동 제목 추출
+[5] 포맷 저장 + Gemini 요약
     ↓
-출력 폴더 (제목 기반 자동 생성)
+출력 폴더 (원본 파일명 기반 자동 생성)
 ```
 
 ---
 
 ## 성능 참고
 
-| 영상 길이 | Whisper | Gemini 전처리 | 번역+요약 | 총 소요 |
+| 영상 길이 | Whisper API | Gemini 전처리 | 번역+요약 | 총 소요 |
 |---|---|---|---|---|
-| 5분 | ~1분 | ~1분 | ~20초 | ~2분 |
-| 30분 | ~6분 | ~6분 | ~1분 | ~13분 |
-| 1시간 | ~12분 | ~12분 | ~5분 | ~29분 |
+| 5분 | ~5초 | ~1분 | ~20초 | ~1.5분 |
+| 30분 | ~30초 | ~6분 | ~1분 | ~8분 |
+| 1시간 | ~1분 | ~12분 | ~5분 | ~18분 |
 
-> RTX 4050 Laptop GPU 기준 (실측, chunk_size=150)  
-> 화자 구분(`--diarize`) 포함 시 +4~5분 추가
+> Whisper API 기준 (24MB 이하)  
+> 24MB 초과 시 RTX 4050 Laptop GPU 로컬 폴백  
+> 화자 구분(`--diarize`) 포함 시 +3~5분 추가
 
 ---
 
@@ -196,7 +204,18 @@ options:
   - [x] FastAPI 연동 (처리 시작 + 진행상태 polling)
   - [x] 화자 동적 추가/삭제 UI
   - [x] 완료 작업 자동 표시
-- [ ] v0.3.0: 성능 개선 + 웹 버전
-  - [ ] Groq/OpenAI Whisper API 연동 (속도 개선)
+- [x] v0.3.0: 성능 개선 + UI 개선
+  - [x] OpenAI Whisper API 연동 (자동 선택, 로컬 폴백)
+  - [x] Gemini 전처리 병렬 처리
+  - [x] 화자 구분 자동/수동 모드
+  - [x] 한국어 소스 번역 스킵
+  - [x] 한국어 Excel Translation 컬럼 생략
+  - [x] 원본 파일명 기반 폴더 생성
+  - [x] 처리 중 단계별 로그 + 소요시간 표시
+  - [x] 로컬 파일 선택 버튼
+- [ ] v0.3.1: 안정화
+  - [ ] 백엔드 로그 영어 통일
+  - [ ] .exe 패키징
+- [ ] v0.4.0: CSS + 웹 버전
   - [ ] CSS 다듬기
   - [ ] Vercel + Railway 웹 배포

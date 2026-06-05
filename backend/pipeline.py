@@ -105,9 +105,12 @@ def run(
         # ── Step 1: 다운로드 ──────────────────────────────
         t = _time.time()
         progress("Downloading audio...", 5)
-        audio_path = download_audio(
+        audio_path, original_name = download_audio(
             source, output_name, import_dir=Path(import_dir) if import_dir else None
         )
+        # 원본 파일명이 있으면 output_name 교체
+        if original_name:
+            output_name = original_name
         progress("Download complete", 20)
         print(f"\n  -> audio: {audio_path}  [{elapsed(t)}]")
 
