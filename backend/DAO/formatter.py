@@ -11,14 +11,13 @@ from pathlib import Path
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
-
 OUTPUT_FORMATS = {
-    "txt":           "plain text (translation only)",
+    "txt": "plain text (translation only)",
     "txt_bilingual": "text with timecode (original + translation)",
-    "srt":           "SRT subtitle (translation only)",
+    "srt": "SRT subtitle (translation only)",
     "srt_bilingual": "SRT subtitle bilingual (original + translation)",
-    "excel":         "Excel (timecode / original / translation)",
-    "all":           "save all formats",
+    "excel": "Excel (timecode / original / translation)",
+    "all": "save all formats",
 }
 
 
@@ -91,18 +90,18 @@ def format_and_save(
         except Exception as e:
             print(f"[Formatter] Summary failed (skipped): {e}")
 
-    # 최종 파일명 + 제목 기반 폴더 생성
-    final_name = _sanitize_filename(auto_title) if auto_title else output_name
+    # 폴더명은 원본 파일명 우선, Gemini 제목은 요약 파일명에만 사용
+    final_name = output_name
     final_dir = base_dir / final_name
     final_dir.mkdir(parents=True, exist_ok=True)
     print(f"[Formatter] Output folder: {final_dir}")
 
     suffix_map = {
-        "txt":           f"{final_name}_번역.txt",
+        "txt": f"{final_name}_번역.txt",
         "txt_bilingual": f"{final_name}_원문번역.txt",
-        "srt":           f"{final_name}_번역.srt",
+        "srt": f"{final_name}_번역.srt",
         "srt_bilingual": f"{final_name}_병기.srt",
-        "excel":         f"{final_name}.xlsx",
+        "excel": f"{final_name}.xlsx",
     }
 
     saved = []
@@ -124,7 +123,9 @@ def format_and_save(
     except OSError:
         pass
 
-    return FormatResult(saved_files=saved, claude_summary=claude_summary, auto_title=auto_title)
+    return FormatResult(
+        saved_files=saved, claude_summary=claude_summary, auto_title=auto_title
+    )
 
 
 def _sanitize_filename(name: str) -> str:
@@ -136,7 +137,8 @@ def _sanitize_filename(name: str) -> str:
 def _extract_speaker(text: str) -> tuple[str, str]:
     """[화자] 텍스트 에서 화자와 본문 분리"""
     import re
-    m = re.match(r'^\[([^\]]+)\]\s*(.*)', text.strip(), re.DOTALL)
+
+    m = re.match(r"^\[([^\]]+)\]\s*(.*)", text.strip(), re.DOTALL)
     if m:
         return m.group(1).strip(), m.group(2).strip()
     return "", text.strip()
@@ -151,22 +153,32 @@ def _save_excel(result: TranslationResult, path: Path):
     header_font = Font(bold=True, color="FFFFFF", name="Malgun Gothic")
     center = Alignment(horizontal="center", vertical="center")
     thin = Border(
-        left=Side(style="thin"), right=Side(style="thin"),
-        top=Side(style="thin"), bottom=Side(style="thin"),
+        left=Side(style="thin"),
+        right=Side(style="thin"),
+        top=Side(style="thin"),
+        bottom=Side(style="thin"),
     )
+
+    # 한국어 소스면 Translation 컬럼 생략
+    is_korean = result.source_language.lower() in ("ko", "korean")
 
     # 화자 컬럼이 있는지 확인
     has_speaker = any(
-        _extract_speaker(seg.translated.strip())[0]
-        for seg in result.segments
+        _extract_speaker(seg.translated.strip())[0] for seg in result.segments
     )
 
-    if has_speaker:
-        headers   = ["#", "Start", "End", "Speaker", "Original", "Translation"]
-        col_widths = [5,   13,      13,    15,         45,         45]
-    else:
-        headers   = ["#", "Start", "End", "Original", "Translation"]
-        col_widths = [5,   13,      13,    50,          50]
+    if has_speaker and not is_korean:
+        headers = ["#", "Start", "End", "Speaker", "Original", "Translation"]
+        col_widths = [5, 13, 13, 15, 45, 45]
+    elif has_speaker and is_korean:
+        headers = ["#", "Start", "End", "Speaker", "Original"]
+        col_widths = [5, 13, 13, 15, 90]
+    elif not has_speaker and not is_korean:
+        headers = ["#", "Start", "End", "Original", "Translation"]
+        col_widths = [5, 13, 13, 50, 50]
+    else:  # 한국어 + 화자 없음
+        headers = ["#", "Start", "End", "Original"]
+        col_widths = [5, 13, 13, 100]
 
     # 화자별 색상 매핑
     speaker_colors = {}
@@ -189,16 +201,45 @@ def _save_excel(result: TranslationResult, path: Path):
             speaker, orig_text = _extract_speaker(seg.original.strip())
             _, trans_text = _extract_speaker(seg.translated.strip())
 
-            # 화자 색상 배정
             if speaker and speaker not in speaker_colors:
                 color_idx = len(speaker_colors) % len(color_pool)
                 speaker_colors[speaker] = color_pool[color_idx]
 
             row_color = speaker_colors.get(speaker, "FFFFFF")
-            values = [seg.index + 1, seg.start_srt(), seg.end_srt(), speaker, orig_text, trans_text]
+            if is_korean:
+                values = [
+                    seg.index + 1,
+                    seg.start_srt(),
+                    seg.end_srt(),
+                    speaker,
+                    orig_text,
+                ]
+            else:
+                values = [
+                    seg.index + 1,
+                    seg.start_srt(),
+                    seg.end_srt(),
+                    speaker,
+                    orig_text,
+                    trans_text,
+                ]
         else:
             row_color = "F5F8FC" if row % 2 == 0 else "FFFFFF"
-            values = [seg.index + 1, seg.start_srt(), seg.end_srt(), seg.original.strip(), seg.translated.strip()]
+            if is_korean:
+                values = [
+                    seg.index + 1,
+                    seg.start_srt(),
+                    seg.end_srt(),
+                    seg.original.strip(),
+                ]
+            else:
+                values = [
+                    seg.index + 1,
+                    seg.start_srt(),
+                    seg.end_srt(),
+                    seg.original.strip(),
+                    seg.translated.strip(),
+                ]
 
         for col, val in enumerate(values, 1):
             cell = ws.cell(row=row, column=col, value=val)
@@ -222,6 +263,7 @@ def _summarize_and_get_title(result: TranslationResult, hint: str) -> tuple[str,
         raise EnvironmentError("GEMINI_API_KEY not found.")
 
     import google.genai as genai
+
     client = genai.Client(api_key=api_key)
 
     segs = result.segments[:200]
