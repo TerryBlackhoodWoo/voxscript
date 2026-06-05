@@ -1,7 +1,7 @@
 """
 VOXScript - 번역 모듈
 DeepL API (Free tier: 월 500,000자 무료)
-입력: CleanedResult (Claude 전처리 완료된 세그먼트)
+입력: CleanedResult (Gemini 전처리 완료된 세그먼트)
 """
 
 import os
@@ -10,7 +10,6 @@ import deepl
 from dataclasses import dataclass
 from DAO.cleaner import CleanedResult, CleanedSegment
 
-# DeepL 지원 타겟 언어 (자주 쓰는 것)
 TARGET_LANGUAGES = {
     "KO": "한국어",
     "EN-US": "영어 (미국)",
@@ -51,7 +50,6 @@ class TranslationResult:
     target_language: str
 
     def to_bilingual_srt(self) -> str:
-        """원문 + 번역 병기 SRT"""
         lines = []
         for seg in self.segments:
             lines.append(str(seg.index + 1))
@@ -62,7 +60,6 @@ class TranslationResult:
         return "\n".join(lines)
 
     def to_translated_only_srt(self) -> str:
-        """번역만 SRT"""
         lines = []
         for seg in self.segments:
             lines.append(str(seg.index + 1))
@@ -82,37 +79,45 @@ class TranslationResult:
             lines.append("")
         return "\n".join(lines)
 
+
 def translate(
     cleaned_result: CleanedResult,
     target_lang: str = "KO",
     batch_size: int = 50,
     progress_callback=None,
 ) -> TranslationResult:
-    """
-    CleanedResult → TranslationResult
+    # 원본이 한국어고 타겟도 한국어면 번역 스킵
+    src_lang = cleaned_result.detected_language or ""
+    if target_lang == "KO" and src_lang.lower() in ("ko", "korean"):
+        print(f"[DeepL] Korean source detected, skipping translation")
+        if progress_callback:
+            progress_callback("Korean → skipping translation", 93)
+        segments = [
+            TranslatedSegment(
+                index=seg.index,
+                start=seg.start,
+                end=seg.end,
+                original=seg.text,
+                translated=seg.text,
+            )
+            for seg in cleaned_result.segments
+        ]
+        return TranslationResult(
+            segments=segments,
+            source_language=src_lang,
+            target_language=target_lang,
+        )
 
-    Args:
-        cleaned_result: Claude 전처리 완료된 세그먼트
-        target_lang: 타겟 언어 코드 (DeepL 형식)
-        batch_size: 한 번에 보낼 세그먼트 수 (API 절약)
-        progress_callback: fn(step: str, pct: int)
-
-    Returns:
-        TranslationResult
-    """
     api_key = os.environ.get("DEEPL_API_KEY")
     if not api_key:
-        raise EnvironmentError(
-            "DEEPL_API_KEY 환경변수가 설정되지 않았습니다.\n"
-            ".env 파일에 DEEPL_API_KEY=your_key_here 추가하세요."
-        )
+        raise EnvironmentError("DEEPL_API_KEY not set in .env")
 
     translator = deepl.Translator(api_key)
     segments = cleaned_result.segments
     total = len(segments)
     translated_segments = []
 
-    print(f"[DeepL] 번역 시작: {total}개 세그먼트 → {target_lang}")
+    print(f"[DeepL] Translating: {total} segments → {target_lang}")
 
     for batch_start in range(0, total, batch_size):
         batch = segments[batch_start : batch_start + batch_size]
@@ -120,12 +125,9 @@ def translate(
 
         if progress_callback:
             pct = 80 + int((batch_start / total) * 12)
-            progress_callback(f"DeepL 번역 중... ({batch_start}/{total})", pct)
+            progress_callback(f"DeepL translating... ({batch_start}/{total})", pct)
 
-        results = translator.translate_text(
-            texts,
-            target_lang=target_lang,
-        )
+        results = translator.translate_text(texts, target_lang=target_lang)
 
         for seg, result in zip(batch, results):
             translated_segments.append(
@@ -141,11 +143,10 @@ def translate(
         if batch_start + batch_size < total:
             time.sleep(0.3)
 
-    source = cleaned_result.detected_language
-    print(f"[DeepL] 완료: {source} → {target_lang}")
+    print(f"[DeepL] Done: {src_lang} → {target_lang}")
 
     return TranslationResult(
         segments=translated_segments,
-        source_language=source,
+        source_language=src_lang,
         target_language=target_lang,
     )
