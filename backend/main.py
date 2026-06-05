@@ -26,6 +26,10 @@ from DAO.transcriber import transcribe, SUPPORTED_LANGUAGES
 from DAO.cleaner import clean
 from DAO.translator import translate, TARGET_LANGUAGES
 from DAO.formatter import format_and_save, OUTPUT_FORMATS
+import sys
+
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
 
 app = FastAPI(title="VOXScript API", version="0.1.0")
 
@@ -172,15 +176,18 @@ def _run_pipeline(job_id: str, req: ProcessRequest):
         _update(job_id, "Downloading audio...", 5)
         _log(job_id, f"[1/5] Downloading: {req.source[:60]}...")
         t = _time.time()
-        audio_path = download_audio(
+        audio_path, original_name = download_audio(
             req.source,
             output_name,
             import_dir=Path(req.import_dir) if req.import_dir else None,
         )
+        # 원본 파일명이 있으면 output_name 교체
+        if original_name:
+            output_name = original_name
         _update(job_id, "Download complete", 20)
         _log(
             job_id,
-            f"[1/5] Download complete [{_time.time()-t:.1f}s] → {audio_path.name}",
+            f"[1/5] Download complete [{_time.time()-t:.1f}s] → {audio_path.name} (original: {original_name})",
         )
 
         # Step 2: STT
@@ -300,5 +307,5 @@ if __name__ == "__main__":
     import uvicorn
 
     port = int(os.environ.get("VOXSCRIPT_PORT", 8765))
-    print(f"[VOXScript] API server starting: http://localhost:{port}")
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+    print(f"[VOXScript] API server starting: http://localhost:{port}", flush=True)
+    uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")  # warning → info
