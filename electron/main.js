@@ -14,6 +14,7 @@ const DEV_MODE = process.env.NODE_ENV === "development";
 let mainWindow = null;
 let backendProcess = null;
 
+
 // ── Start Backend ─────────────────────────────────────────
 function startBackend() {
   const backendDir = path.join(__dirname, "..", "backend");
@@ -38,13 +39,28 @@ function startBackend() {
   });
 
   backendProcess.stdout.on("data", (data) => {
-    console.log(`[Backend] ${data.toString('utf-8').trim()}`);
+    const lines = data.toString('utf-8').trim().split('\n')
+    lines.forEach(line => {
+      if (line.trim()) process.stdout.write(`[Backend] ${line.trim()}\n`)
+    })
   });
   backendProcess.stderr.on("data", (data) => {
-    console.error(`[Backend ERR] ${data.toString('utf-8').trim()}`);
+    const lines = data.toString('utf-8').trim().split('\n')
+    lines.forEach(line => {
+      if (!line.trim()) return
+      if (line.includes('%|') || line.includes('frames/s')) {
+        process.stdout.write(`\r[Whisper] ${line.trim()}`)
+      } else {
+        process.stdout.write(`[Backend ERR] ${line.trim()}\n`)
+      }
+    })
   });
   backendProcess.on("exit", (code) => {
-    console.log(`[Backend] Exited (code: ${code})`);
+    if (code === 0) {
+      console.log(`[Backend] Exited normally`)
+    } else {
+      console.error(`[Backend] Exited with error code: ${code}`)
+    }
   });
 }
 
