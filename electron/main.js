@@ -14,7 +14,6 @@ const DEV_MODE = process.env.NODE_ENV === "development";
 let mainWindow = null;
 let backendProcess = null;
 
-
 // ── Start Backend ─────────────────────────────────────────
 function startBackend() {
   const backendDir = path.join(__dirname, "..", "backend");
@@ -41,17 +40,18 @@ function startBackend() {
   backendProcess.stdout.on("data", (data) => {
     const lines = data.toString('utf-8').trim().split('\n')
     lines.forEach(line => {
-      if (line.trim()) process.stdout.write(`[Backend] ${line.trim()}\n`)
+      if (line.trim()) console.log(`[Backend] ${line.trim()}`)
     })
   });
   backendProcess.stderr.on("data", (data) => {
     const lines = data.toString('utf-8').trim().split('\n')
     lines.forEach(line => {
       if (!line.trim()) return
+      // Whisper tqdm 진행바는 ERR로 나오지만 정상이라 구분
       if (line.includes('%|') || line.includes('frames/s')) {
         process.stdout.write(`\r[Whisper] ${line.trim()}`)
       } else {
-        process.stdout.write(`[Backend ERR] ${line.trim()}\n`)
+        console.error(`[Backend ERR] ${line.trim()}`)
       }
     })
   });
@@ -97,7 +97,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
     },
-    backgroundColor: "#0f1117",
+    backgroundColor: "#fffaf5",
     show: false,
   });
 
