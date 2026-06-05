@@ -5,9 +5,7 @@ Supports: YouTube URL / Google Drive file or folder link / local file
 
 import os
 import re
-import io
 import subprocess
-import time
 from pathlib import Path
 
 DEFAULT_IMPORT_DIR = Path.home() / "Downloads" / "VOXScript" / "temp"
@@ -26,7 +24,6 @@ def is_gdrive_url(url: str) -> bool:
 
 
 def extract_gdrive_file_id(url: str) -> str | None:
-    """파일 링크에서 ID 추출"""
     patterns = [
         r"/file/d/([a-zA-Z0-9_-]+)",
         r"id=([a-zA-Z0-9_-]+)",
@@ -39,20 +36,17 @@ def extract_gdrive_file_id(url: str) -> str | None:
 
 
 def extract_gdrive_folder_id(url: str) -> str | None:
-    """폴더 링크에서 ID 추출"""
     m = re.search(r"/folders/([a-zA-Z0-9_-]+)", url)
     return m.group(1) if m else None
 
 
 def _get_gdrive_service():
-    """Google Drive API 서비스 객체 반환 (OAuth 인증)"""
     from google.oauth2.credentials import Credentials
     from google_auth_oauthlib.flow import InstalledAppFlow
     from google.auth.transport.requests import Request
     from googleapiclient.discovery import build
 
     creds = None
-
     if TOKEN_PATH.exists():
         creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), GDRIVE_SCOPES)
 
@@ -69,7 +63,6 @@ def _get_gdrive_service():
                 str(CREDENTIALS_PATH), GDRIVE_SCOPES
             )
             creds = flow.run_local_server(port=0)
-
         TOKEN_PATH.write_text(creds.to_json())
 
     return build("drive", "v3", credentials=creds)
@@ -77,17 +70,14 @@ def _get_gdrive_service():
 
 def _gdrive_download_file(
     service, file_id: str, output_path: Path, mime_type: str = ""
-) -> Path:
-    """Drive API로 파일 다운로드 후 mp3 변환"""
+) -> tuple[Path, str]:
     from googleapiclient.http import MediaIoBaseDownload
 
-    # 파일 메타데이터 조회
     meta = service.files().get(fileId=file_id, fields="name,mimeType").execute()
     name = meta.get("name", "audio")
     mime = meta.get("mimeType", "")
     print(f"[Downloader] Downloading: {name} ({mime})")
 
-    # 음원/영상 파일 다운로드
     raw_path = output_path.parent / f"_raw_{file_id}{_ext_from_mime(mime)}"
     request = service.files().get_media(fileId=file_id)
 
@@ -100,14 +90,13 @@ def _gdrive_download_file(
                 print(f"\r  {int(status.progress() * 100)}%", end="", flush=True)
     print()
 
-    # mp3 변환
     if str(raw_path).endswith(".mp3"):
         raw_path.rename(output_path)
     else:
         _convert_to_mp3(str(raw_path), output_path)
         raw_path.unlink(missing_ok=True)
 
-    return output_path
+    return output_path, name
 
 
 def _ext_from_mime(mime: str) -> str:
@@ -122,32 +111,42 @@ def _ext_from_mime(mime: str) -> str:
     return mapping.get(mime, ".mp4")
 
 
+def _sanitize_filename(name: str) -> str:
+    name = re.sub(r'[\\/:*?"<>|]', "", name)
+    name = name.strip().replace(" ", "_")
+    stem = Path(name).stem
+    return stem[:50] if len(stem) > 50 else stem
+
+
 def download_audio(
     source: str,
     output_name: str = "audio",
     import_dir: Path | None = None,
-) -> Path:
+) -> tuple[Path, str]:
+    """
+    Returns:
+        (mp3_path, original_name)
+    """
     work_dir = Path(import_dir) if import_dir else DEFAULT_IMPORT_DIR
     work_dir.mkdir(parents=True, exist_ok=True)
     output_path = work_dir / f"{output_name}.mp3"
 
     # ── 로컬 파일 ──────────────────────────────────────
     if os.path.exists(source):
-        print(f"[Downloader] Local file: {source}")
+        original_name = _sanitize_filename(Path(source).name)
+        print(f"[Downloader] Local file: {source} (name: {original_name})")
         if source.endswith(".mp3"):
-            return Path(source)
+            return Path(source), original_name
         _convert_to_mp3(source, output_path)
-        return output_path
+        return output_path, original_name
 
     # ── Google Drive ───────────────────────────────────
     if is_gdrive_url(source):
         service = _get_gdrive_service()
-
         folder_id = extract_gdrive_folder_id(source)
         file_id = extract_gdrive_file_id(source)
 
         if folder_id:
-            # 폴더 안 음원/영상 파일 목록 조회
             print(f"[Downloader] Google Drive folder: {folder_id}")
             query = (
                 f"'{folder_id}' in parents and trashed=false and ("
@@ -155,11 +154,7 @@ def download_audio(
             )
             results = (
                 service.files()
-                .list(
-                    q=query,
-                    fields="files(id, name, mimeType)",
-                    orderBy="name",
-                )
+                .list(q=query, fields="files(id, name, mimeType)", orderBy="name")
                 .execute()
             )
             files = results.get("files", [])
@@ -170,17 +165,17 @@ def download_audio(
             if len(files) == 1:
                 f = files[0]
                 print(f"[Downloader] Found 1 file: {f['name']}")
-                return _gdrive_download_file(service, f["id"], output_path)
+                path, name = _gdrive_download_file(service, f["id"], output_path)
+                return path, _sanitize_filename(name)
             else:
-                # 여러 파일 → 순서대로 다운로드 후 병합
                 print(f"[Downloader] Found {len(files)} files, downloading all...")
                 part_paths = []
+                first_name = _sanitize_filename(files[0]["name"])
                 for i, f in enumerate(files):
                     part_path = work_dir / f"_part_{i:03d}.mp3"
                     _gdrive_download_file(service, f["id"], part_path)
                     part_paths.append(part_path)
 
-                # ffmpeg concat
                 list_file = work_dir / "_concat_list.txt"
                 list_file.write_text(
                     "\n".join(f"file '{p}'" for p in part_paths), encoding="utf-8"
@@ -206,17 +201,21 @@ def download_audio(
                 for p in part_paths:
                     p.unlink(missing_ok=True)
                 list_file.unlink(missing_ok=True)
-                return output_path
+                return output_path, first_name
 
         elif file_id:
             print(f"[Downloader] Google Drive file: {file_id}")
-            return _gdrive_download_file(service, file_id, output_path)
-
+            path, name = _gdrive_download_file(service, file_id, output_path)
+            return path, _sanitize_filename(name)
         else:
             raise ValueError(f"Cannot extract file/folder ID from: {source}")
 
     # ── YouTube ────────────────────────────────────────
     if is_youtube_url(source):
+        yt_match = re.search(r"(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})", source)
+        yt_id = yt_match.group(1) if yt_match else output_name
+        original_name = yt_id
+
         print(f"[Downloader] YouTube audio extracting...")
         result = subprocess.run(
             [
@@ -225,7 +224,9 @@ def download_audio(
                 "--audio-format",
                 "mp3",
                 "--audio-quality",
-                "0",
+                "5",
+                "--postprocessor-args",
+                "ffmpeg:-b:a 64k",
                 "-o",
                 str(work_dir / f"{output_name}.%(ext)s"),
                 source,
@@ -236,9 +237,12 @@ def download_audio(
         if result.returncode != 0:
             raise RuntimeError(f"yt-dlp failed:\n{result.stderr}")
         print(f"[Downloader] Done: {output_path}")
-        return output_path
+        return output_path, original_name
 
-    raise ValueError(f"Unsupported source format: {source}")
+    raise ValueError(
+        f"지원하지 않는 소스입니다: {source}\n"
+        "YouTube URL / Google Drive 링크 / 로컬 파일 경로를 사용해주세요."
+    )
 
 
 def _convert_to_mp3(input_path: str, output_path: Path):
@@ -251,14 +255,14 @@ def _convert_to_mp3(input_path: str, output_path: Path):
             "-vn",
             "-acodec",
             "libmp3lame",
-            "-q:a",
-            "2",
+            "-b:a",
+            "64k",
             str(output_path),
             "-y",
         ],
         capture_output=True,
         text=True,
-        encoding="utf-8",  # ← 이거 추가
+        encoding="utf-8",
     )
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg failed:\n{result.stderr}")
