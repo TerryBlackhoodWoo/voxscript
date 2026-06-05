@@ -126,10 +126,12 @@ Input:
 
 Rules:
 1. Remove overlapping/duplicate text between consecutive segments
-2. Join incomplete sentences with next segment
-3. Group 2-5 related segments into one paragraph
-4. s = first segment start, e = last segment end
-5. Keep all content - do not skip or summarize
+2. Join incomplete sentences ONLY if clearly from the same speaker continuing the same thought
+3. NEVER merge segments that appear to be from different speakers (e.g. question followed by answer)
+4. NEVER merge short responses ("네", "감사합니다", "맞아요") with other segments
+5. Keep interview Q&A structure intact - questions and answers stay separate
+6. s = first segment start, e = last segment end
+7. Keep all content - do not skip or summarize
 
 Return ONLY JSON array, no other text:
 [{{"s": 0.0, "e": 5.2, "t": "cleaned text"}}, ...]"""
