@@ -103,10 +103,10 @@ function createWindow() {
 
   if (DEV_MODE) {
     mainWindow.loadURL("http://localhost:5173");
-    mainWindow.webContents.openDevTools();
+    mainWindow.webContents.openDevTools();  // 개발 모드에서만 열기
   } else {
     mainWindow.loadFile(path.join(__dirname, "..", "frontend", "dist", "index.html"));
-    mainWindow.webContents.openDevTools();
+    // 프로덕션에서는 DevTools 끄기
   }
 
   mainWindow.once("ready-to-show", () => mainWindow.show());
