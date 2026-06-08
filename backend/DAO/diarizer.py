@@ -99,10 +99,8 @@ JSON만 반환."""
     # 사용자 지정 화자명 우선 적용, 없으면 Gemini 추론 결과 사용
     if speakers:
         role_list = speakers
-        print(f"[Diarizer] Using user-specified speakers: {role_list}")
     else:
         role_list = list(roles.values())
-        print(f"[Diarizer] Using Gemini-detected speakers: {role_list}")
 
     # 화자 1명이면 라벨링 불필요
     if len(role_list) < 2:
@@ -139,14 +137,15 @@ JSON만 반환."""
 패턴: {pattern}
 
 아래 각 세그먼트의 화자를 판단하세요.
-반드시 모든 index에 대해 {speakers_str} 중 하나를 배정하세요.
+반드시 모든 index에 대해 {speakers_str} 중 하나를 정확히 배정하세요.
+화자 이름은 반드시 위에 나열된 이름 그대로 사용하세요 (다른 이름 금지).
 확실하지 않으면 문맥상 가장 가능성 높은 화자로 배정 (UNKNOWN 사용 금지).
 
 세그먼트:
 {chunk_text}
 
-JSON만 반환 (index는 문자열):
-{{"0": "{interviewee}", "1": "{interviewer}", ...}}"""
+JSON만 반환 (index는 문자열, 화자명은 위 이름 그대로):
+{{"0": "화자명", "1": "화자명", ...}}"""
 
         # 재시도 로직 (최대 2회)
         for attempt in range(2):
