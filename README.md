@@ -9,9 +9,10 @@ YouTube / Google Drive / 로컬 파일을 자동으로 번역 스크립트로 �
 
 ## 주요 기능
 
-- **다국어 STT** — OpenAI Whisper API (자동) / 로컬 Whisper CUDA (폴백)
+- **다국어 STT** — OpenAI Whisper API (자동) / 로컬 Whisper CUDA (24MB 초과 시 폴백)
 - **중복 제거** — Gemini 병렬 전처리 (Q&A 구조 보존, 화자 전환 시 분리 유지)
 - **DeepL 번역** — 한국어 소스 자동 스킵
+- **스크립트 편집** — STT 결과 인라인 편집, 행 분리(✂)/병합(⊕), 화자 드롭다운 지정
 - **단계별 화자 라벨링** — 처리 중 일시 정지 → 유저 직접 라벨링 → AI 자동 fill
 - **프로젝트 파일 저장** — `.vox` 형식으로 중간 저장, 이어하기 가능
 - **다양한 출력 포맷** — TXT / SRT / Excel (화자별 색상, 한국어 Translation 컬럼 생략)
@@ -25,7 +26,6 @@ YouTube / Google Drive / 로컬 파일을 자동으로 번역 스크립트로 �
 ```
 VOXScript/
 ├── backend/
-│   ├── pipeline.py         ← CLI 진입점
 │   ├── main.py             ← FastAPI 서버 (v0.4.0 단계별 파이프라인)
 │   ├── project_schema.py   ← VoxProject 프로젝트 파일 구조
 │   ├── cleaner.py          ← Gemini 전처리 (병렬처리, Q&A 구조 보존)
@@ -37,8 +37,8 @@ VOXScript/
 │       ├── diarizer.py     ← Gemini 화자 구분 (유저 지정 우선)
 │       └── formatter.py    ← 파일 저장 + Gemini 요약
 ├── electron/
-│   ├── main.js
-│   └── preload.js
+│   ├── main.js             ← Electron 메인
+│   └── preload.js          ← IPC 브릿지
 ├── frontend/               ← React + Vite UI (별도 레포: voxscript_frontend)
 ├── package.json
 └── .env.example
@@ -46,19 +46,9 @@ VOXScript/
 
 ---
 
-## 환경 요구사항
-
-- Python 3.11
-- Node.js 18+
-- NVIDIA GPU (CUDA 12.1) — 로컬 Whisper 사용 시
-- ffmpeg (PATH 등록 필요)
-
----
-
 ## 빠른 시작
 
 ### Electron 앱 모드
-
 ```bash
 npm install
 npm run build
@@ -66,51 +56,32 @@ npm run electron
 ```
 
 ### CLI 모드
-
 ```bash
 cd backend
 pip install -r requirements.txt
-
 python pipeline.py "https://drive.google.com/drive/folders/FOLDER_ID" --lang en --format all
-python pipeline.py "./video.mp4" --lang ja --format all
-python pipeline.py "URL" --lang en --format all --diarize --speakers 진행자 게스트
+python pipeline.py "./video.mp4" --lang ja --format all --diarize --speakers 진행자 게스트
 ```
 
 ---
 
-## 파이프라인 흐름 (v0.4.0)
+## 파이프라인 흐름 (v0.6.0)
 
 ```
-입력 (YouTube / Google Drive / 로컬)
-    ↓
 [1단계] 다운로드 → Whisper STT → Gemini 전처리
     ↓
-[2단계] ⏸ 화자 라벨링 (유저 개입)
-         - 앞 30개 세그먼트 표시
-         - 화자 이름 직접 입력/수정
-         - 확인 or 스킵 (AI 자동)
+[2단계] ⏸ 스크립트 편집 + 화자 라벨링 (유저 개입)
+         · 텍스트 인라인 편집
+         · 행 분리 (✂) — 커서 위치 기준, 타임스탬프 자동 분배
+         · 행 병합 (⊕) — 아래 행과 합치기
+         · 화자 드롭다운 지정 / 확인 or 스킵
     ↓
-[3단계] 나머지 화자 자동 fill (Gemini, 유저 지정 이름 우선)
+[3단계] 나머지 화자 자동 fill (유저 지정 이름 우선)
     ↓
 [4단계] 번역 (한국어 소스면 스킵)
     ↓
-[5단계] 저장 경로 선택 → 파일 저장
-    ↓
-프로젝트 파일 (.vox) 자동 저장 → 사이드바에 표시
+[5단계] 저장 경로 선택 → 파일 저장 → .vox 프로젝트 파일 저장
 ```
-
----
-
-## 프로젝트 파일 (.vox)
-
-```
-~/Downloads/VOXScript/projects/
-├── 나성범_인터뷰_abc12345.vox
-├── Willem_Dafoe_abc67890.vox
-└── ...
-```
-
-단계 목록: `init → downloading → transcribing → cleaning → labeling → diarizing → translating → saving → done`
 
 ---
 
@@ -142,8 +113,15 @@ python pipeline.py "URL" --lang en --format all --diarize --speakers 진행자 �
 - [x] v0.2.0: Electron 데스크탑 앱
 - [x] v0.3.0: Whisper API + Gemini 병렬처리 + 한국어 최적화
 - [x] v0.4.0: 단계별 파이프라인 + 화자 라벨링 UI + 프로젝트 파일
-- [ ] v0.5.0: UI 최적화
-  - [ ] 중앙 뷰에 선택된 프로젝트 요약 표시
-  - [ ] 완료된 파일 목록 + 파일 열기 버튼
-  - [ ] 폰트, 간격, 색상 정리
-- [ ] v1.0.0: .exe 패키징
+- [x] v0.5.0: UI 최적화
+  - [x] 중앙 뷰 프로젝트 요약 표시
+  - [x] 파일 목록 + 열기 버튼
+  - [x] Inter + Noto Sans KR 폰트
+- [x] v0.6.0: 스크립트 편집 UI
+  - [x] 텍스트 인라인 편집
+  - [x] 행 분리 / 병합
+  - [x] 화자 드롭다운 (기본값 미지정)
+- [ ] v1.0.0: 배포 + 자동 업데이트
+  - [x] 앱 아이콘
+  - [ ] .exe 패키징 (electron-builder)
+  - [ ] 자동 업데이트 (electron-updater)
