@@ -15,7 +15,7 @@ YouTube / Google Drive / 로컬 파일을 자동으로 번역 스크립트로 �
 - **단계별 화자 라벨링** — 처리 중 일시 정지 → 유저 직접 라벨링 → AI 자동 fill
 - **프로젝트 파일 저장** — `.vox` 형식으로 중간 저장, 이어하기 가능
 - **다양한 출력 포맷** — TXT / SRT / Excel (화자별 색상, 한국어 Translation 컬럼 생략)
-- **원본 파일명 기반 폴더 생성** — YouTube 제목 / Google Drive / 로컬 파일명
+- **원본 파일명 기반 저장** — YouTube 제목 / Google Drive / 로컬 파일명
 - **Electron 데스크탑 앱** — React UI + FastAPI 백엔드 통합
 
 ---
@@ -71,13 +71,8 @@ npm run electron
 cd backend
 pip install -r requirements.txt
 
-# Google Drive
 python pipeline.py "https://drive.google.com/drive/folders/FOLDER_ID" --lang en --format all
-
-# 로컬 파일
 python pipeline.py "./video.mp4" --lang ja --format all
-
-# 화자 구분
 python pipeline.py "URL" --lang en --format all --diarize --speakers 진행자 게스트
 ```
 
@@ -95,13 +90,13 @@ python pipeline.py "URL" --lang en --format all --diarize --speakers 진행자 �
          - 화자 이름 직접 입력/수정
          - 확인 or 스킵 (AI 자동)
     ↓
-[3단계] 나머지 화자 자동 fill (Gemini)
+[3단계] 나머지 화자 자동 fill (Gemini, 유저 지정 이름 우선)
     ↓
 [4단계] 번역 (한국어 소스면 스킵)
     ↓
 [5단계] 저장 경로 선택 → 파일 저장
     ↓
-프로젝트 폴더 (원본 파일명 기반)
+프로젝트 파일 (.vox) 자동 저장 → 사이드바에 표시
 ```
 
 ---
@@ -110,9 +105,9 @@ python pipeline.py "URL" --lang en --format all --diarize --speakers 진행자 �
 
 ```
 ~/Downloads/VOXScript/projects/
-└── 나성범_인터뷰/
-    ├── project.vox    ← 단계별 상태 저장 (이어하기 가능)
-    └── output/        ← 완성된 파일들
+├── 나성범_인터뷰_abc12345.vox
+├── Willem_Dafoe_abc67890.vox
+└── ...
 ```
 
 단계 목록: `init → downloading → transcribing → cleaning → labeling → diarizing → translating → saving → done`
