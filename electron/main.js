@@ -158,6 +158,34 @@ ipcMain.handle("select-file", async () => {
 // ── IPC: API Port ─────────────────────────────────────────
 ipcMain.handle("get-api-port", () => API_PORT);
 
+// ── IPC: Open File ────────────────────────────────────────
+ipcMain.handle("open-file", async (event, filePath) => {
+  const { shell } = require("electron");
+  const path = require("path");
+  const outputDir = path.join(
+    require("os").homedir(),
+    "Downloads", "VOXScript", "output"
+  );
+  const fullPath = filePath.includes("\\") || filePath.includes("/")
+    ? filePath
+    : path.join(outputDir, filePath);
+  await shell.openPath(fullPath);
+});
+
+// ── IPC: Open Folder ──────────────────────────────────────
+ipcMain.handle("open-folder", async (event, filePath) => {
+  const { shell } = require("electron");
+  const path = require("path");
+  const outputDir = path.join(
+    require("os").homedir(),
+    "Downloads", "VOXScript", "output"
+  );
+  const fullPath = filePath.includes("\\") || filePath.includes("/")
+    ? path.dirname(filePath)
+    : outputDir;
+  await shell.openPath(fullPath);
+});
+
 // ── IPC: Pipeline ─────────────────────────────────────────
 ipcMain.handle("start-pipeline", async (event, settings) => {
   try {
