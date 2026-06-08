@@ -121,7 +121,7 @@ python pipeline.py "./video.mp4" --lang ja --format all --diarize --speakers 진
   - [x] 텍스트 인라인 편집
   - [x] 행 분리 / 병합
   - [x] 화자 드롭다운 (기본값 미지정)
-- [ ] v1.0.0: 배포 + 자동 업데이트
+- [x] v1.0.0: 배포 + 자동 업데이트
   - [x] 앱 아이콘
-  - [ ] .exe 패키징 (electron-builder)
+  - [x] .exe 패키징 (electron-builder)
   - [ ] 자동 업데이트 (electron-updater)
