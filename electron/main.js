@@ -16,11 +16,28 @@ let backendProcess = null;
 
 // ── Start Backend ─────────────────────────────────────────
 function startBackend() {
-  const backendDir = path.join(__dirname, "..", "backend");
+  // 패키징 시 app.asar 안에서 실행되므로 resourcesPath 사용
+  const backendDir = app.isPackaged
+    ? path.join(process.resourcesPath, "backend")
+    : path.join(__dirname, "..", "backend");
 
-  const pythonCmd = app.isPackaged
-    ? path.join(process.resourcesPath, "python", "python.exe")
-    : "python";
+  const fs = require("fs");
+  const os = require("os");
+  const home = os.homedir();
+  const localAppData = process.env.LOCALAPPDATA
+    || path.join(home, "AppData", "Local");
+  const candidates = [
+    path.join(localAppData, "Programs", "Python", "Python311", "python.exe"),
+    path.join(localAppData, "Programs", "Python", "Python312", "python.exe"),
+    path.join(localAppData, "Programs", "Python", "Python310", "python.exe"),
+    path.join(localAppData, "Programs", "Python", "Python313", "python.exe"),
+    "python",
+    "python3",
+  ];
+  const pythonCmd = candidates.find(p => {
+    try { return p === "python" || p === "python3" || fs.existsSync(p); } catch { return false; }
+  }) || "python";
+  console.log("[Electron] Python resolved:", pythonCmd);
 
   const scriptPath = path.join(backendDir, "main.py");
 
@@ -91,7 +108,7 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     title: "VOXScript",
-    // icon: path.join(__dirname, "assets", "icon.png"),
+    icon: path.join(__dirname, "assets", "icon.ico"),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
