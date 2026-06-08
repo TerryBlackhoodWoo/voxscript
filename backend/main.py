@@ -66,7 +66,8 @@ class StartRequest(BaseModel):
 
 
 class ResumeRequest(BaseModel):
-    labeled_segments: list[dict]  # [{index, speaker}] 유저가 라벨링한 것들
+    labeled_segments: list[dict]  # [{index, speaker}]
+    speakers: list[str] = []  # 유저가 라벨링 화면에서 지정한 화자 이름들
 
 
 class SaveRequest(BaseModel):
@@ -216,6 +217,11 @@ def resume_pipeline(project_id: str, req: ResumeRequest):
             seg.speaker = label_map[seg.index]
             seg.speaker_confirmed = True
 
+    # 유저가 지정한 화자 이름 저장 (나머지 자동 fill에 사용)
+    if req.speakers:
+        project.settings.speakers = req.speakers
+        print(f"[Project] User speakers: {req.speakers}")
+
     save_project(project)
 
     thread = threading.Thread(
@@ -292,12 +298,11 @@ def _run_stage1(project_id: str):
         )
         if original_name:
             project.original_name = original_name
-            # 프로젝트 폴더 재생성
+            # 프로젝트는 projects/ 폴더에 project_id.vox 파일로 저장
             from project_schema import DEFAULT_PROJECTS_DIR
 
-            new_dir = DEFAULT_PROJECTS_DIR / original_name
-            new_dir.mkdir(parents=True, exist_ok=True)
-            project.project_dir = str(new_dir)
+            DEFAULT_PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+            project.project_dir = str(DEFAULT_PROJECTS_DIR)
 
         project.audio_path = str(audio_path)
         _log(
@@ -514,7 +519,7 @@ def _run_stage3(project_id: str, export_dir: str = None, formats: list = None):
         )
 
         project.summary = format_result.claude_summary or ""
-        _update_stage(project, PipelineStage.DONE, 100)
+        _update_stage(project, PipelineStage.DONE, 100)  # save_project 내부 호출
         _log(
             project_id,
             f"[5] Saved {len(format_result.saved_files)} files [{_time.time()-t:.1f}s]",
