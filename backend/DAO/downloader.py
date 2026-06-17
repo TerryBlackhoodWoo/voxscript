@@ -4,22 +4,32 @@ Supports: Google Drive file or folder link / local file
 (YouTube removed due to cookie/size limitations)
 """
 
-"""
-VOXScript - Downloader
-Supports: Google Drive file or folder link / local file
-(YouTube removed due to cookie/size limitations)
-"""
-
 import os
 import re
+import sys
 import subprocess
 from pathlib import Path
 
 from DAO.bin_paths import get_ffmpeg, get_ytdlp, get_ffmpeg_dir
 
+
+def _backend_root() -> Path:
+    """credentials.json / token.json이 위치해야 하는 기준 디렉토리.
+
+    개발 모드: backend/DAO/downloader.py 기준 backend/ 폴더.
+    PyInstaller 패키징(onedir) 모드: __file__이 _internal/ 안쪽을 가리켜서
+    그 기준으로 parent.parent를 잡으면 실제 exe가 있는 위치와 한 단계 어긋남.
+    sys.frozen일 때는 exe 옆(sys.executable 기준)으로 잡아야 README에서
+    안내하는 "backend/credentials.json" 위치(exe와 동일 폴더)와 일치함.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+    return Path(__file__).parent.parent
+
+
+CREDENTIALS_PATH = _backend_root() / "credentials.json"
+TOKEN_PATH = _backend_root() / "token.json"
 DEFAULT_IMPORT_DIR = Path.home() / "Downloads" / "VOXScript" / "temp"
-CREDENTIALS_PATH = Path(__file__).parent.parent / "credentials.json"
-TOKEN_PATH = Path(__file__).parent.parent / "token.json"
 
 GDRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 

@@ -175,6 +175,12 @@ app.whenReady().then(async () => {
     console.log("[Electron] Backend ready");
   } catch (e) {
     console.error("[Electron] Backend startup failed:", e.message);
+    dialog.showErrorBox(
+      "VOXScript 백엔드 시작 실패",
+      "백엔드 서버가 정상적으로 시작되지 않았습니다.\n" +
+      "앱을 다시 실행해보거나, 문제가 계속되면 로그를 확인해주세요.\n\n" +
+      `(${e.message})`
+    );
   }
 
   createWindow();
@@ -239,34 +245,77 @@ ipcMain.handle("open-folder", async (event, filePath) => {
   await shell.openPath(fullPath);
 });
 
-// ── IPC: Pipeline ─────────────────────────────────────────
-ipcMain.handle("start-pipeline", async (event, settings) => {
+// ── IPC: 백엔드 API 공통 호출 헬퍼 ─────────────────────────
+async function callApi(method, path, body) {
   try {
-    const response = await fetch(`http://127.0.0.1:${API_PORT}/process`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        source: settings.sourceUrl,
-        language: settings.lang,
-        formats: [settings.format],
-        use_summary: !settings.noSummary,
-        diarize: settings.diarize,
-        speakers: settings.diarize ? settings.speakers : [],
-      }),
+    const response = await fetch(`http://127.0.0.1:${API_PORT}${path}`, {
+      method,
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
     });
-    if (!response.ok) throw new Error(`API error: ${response.status}`);
-    return await response.json();
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      const detail = data?.detail || `API error: ${response.status}`;
+      return { ok: false, error: detail };
+    }
+    return { ok: true, data };
   } catch (e) {
     return { ok: false, error: e.message };
   }
+}
+
+// ── IPC: 1단계 시작 — 다운로드 → STT → Gemini 전처리 → 라벨링 대기 ──
+// settings: { source, lang, targetLang, format, modelSize, useSummary }
+ipcMain.handle("start-pipeline", async (event, settings) => {
+  return callApi("POST", "/start", {
+    source: settings.source,
+    lang: settings.lang ?? "auto",
+    target_lang: settings.targetLang ?? "KO",
+    format: settings.format ?? "all",
+    model_size: settings.modelSize ?? "medium",
+    use_summary: settings.useSummary ?? true,
+  });
 });
 
-// ── IPC: Job Status ───────────────────────────────────────
-ipcMain.handle("get-status", async (event, jobId) => {
-  try {
-    const response = await fetch(`http://127.0.0.1:${API_PORT}/status/${jobId}`);
-    return await response.json();
-  } catch {
-    return { status: "error", error: "Connection failed" };
-  }
+// ── IPC: 2단계 완료 — 라벨링 결과 반영 → 화자 fill + 번역 ──
+// payload: { labeledSegments: [{index, speaker}], speakers: ["이름1", "이름2"] }
+ipcMain.handle("resume-pipeline", async (event, projectId, payload) => {
+  return callApi("POST", `/resume/${projectId}`, {
+    labeled_segments: payload?.labeledSegments ?? [],
+    speakers: payload?.speakers ?? [],
+  });
+});
+
+// ── IPC: 5단계 — 최종 포맷 변환 + 파일 저장 ──
+// payload: { exportDir, formats }
+ipcMain.handle("save-output", async (event, projectId, payload) => {
+  return callApi("POST", `/save/${projectId}`, {
+    export_dir: payload?.exportDir ?? null,
+    formats: payload?.formats ?? null,
+  });
+});
+
+// ── IPC: 진행 상태 + 로그 조회 (폴링용) ──
+ipcMain.handle("get-status", async (event, projectId) => {
+  return callApi("GET", `/status/${projectId}`);
+});
+
+// ── IPC: 저장된 프로젝트 목록 (사이드바용) ──
+ipcMain.handle("get-projects", async () => {
+  return callApi("GET", "/projects");
+});
+
+// ── IPC: 저장된 프로젝트 이어하기 ──
+ipcMain.handle("load-project", async (event, projectId) => {
+  return callApi("GET", `/load/${projectId}`);
+});
+
+// ── IPC: 지원 언어 목록 ──
+ipcMain.handle("get-languages", async () => {
+  return callApi("GET", "/languages");
+});
+
+// ── IPC: 출력 포맷 목록 ──
+ipcMain.handle("get-formats", async () => {
+  return callApi("GET", "/formats");
 });

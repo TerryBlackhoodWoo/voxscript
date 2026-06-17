@@ -128,6 +128,21 @@ def load_project(vox_path: Path) -> VoxProject:
     return project
 
 
+def find_project_file(project_id: str, projects_dir: Path = None) -> Path | None:
+    """project_id로 저장된 .vox 파일 경로 찾기.
+
+    save_project()는 {project_dir}/{이름}_{project_id}.vox 형태로 평평하게(flat)
+    저장하므로, project_id로 찾을 때도 같은 패턴(끝이 _{project_id}.vox)으로 찾아야 함.
+    (예전에 main.py가 {project_id}/project.vox 같은 하위 폴더 구조를 기대해서
+    실제 저장 구조와 안 맞아 /status, /load가 항상 실패하던 버그를 여기서 수정)
+    """
+    base = projects_dir or DEFAULT_PROJECTS_DIR
+    if not base.exists():
+        return None
+    matches = list(base.glob(f"*_{project_id}.vox"))
+    return matches[0] if matches else None
+
+
 def list_projects(projects_dir: Path = None) -> list[dict]:
     base = projects_dir or DEFAULT_PROJECTS_DIR
     if not base.exists():

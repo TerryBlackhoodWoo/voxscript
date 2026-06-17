@@ -30,6 +30,7 @@ from project_schema import (
     save_project,
     load_project,
     list_projects,
+    find_project_file,
     DEFAULT_PROJECTS_DIR,
 )
 from DAO.downloader import download_audio
@@ -188,9 +189,9 @@ def start_pipeline(req: StartRequest):
 @app.get("/status/{project_id}", response_model=ProjectStatus)
 def get_status(project_id: str):
     if project_id not in projects:
-        # 파일에서 로드 시도
-        vox_path = DEFAULT_PROJECTS_DIR / project_id / "project.vox"
-        if vox_path.exists():
+        # 파일에서 로드 시도 (flat 저장 구조: *_{project_id}.vox)
+        vox_path = find_project_file(project_id)
+        if vox_path:
             projects[project_id] = load_project(vox_path)
         else:
             raise HTTPException(status_code=404, detail="Project not found")
@@ -241,6 +242,11 @@ def save_output(project_id: str, req: SaveRequest):
         raise HTTPException(status_code=404, detail="Project not found")
 
     project = projects[project_id]
+    if project.stage != PipelineStage.SAVING:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Project is not ready to save (current stage: {project.stage.value})",
+        )
 
     thread = threading.Thread(
         target=_run_stage3,
@@ -254,18 +260,9 @@ def save_output(project_id: str, req: SaveRequest):
 
 @app.get("/load/{project_id}", response_model=ProjectStatus)
 def load_saved_project(project_id: str):
-    """저장된 프로젝트 이어하기"""
-    vox_path = DEFAULT_PROJECTS_DIR / project_id / "project.vox"
-    if not vox_path.exists():
-        # original_name으로 찾기
-        for p in DEFAULT_PROJECTS_DIR.glob("*/project.vox"):
-            try:
-                proj = load_project(p)
-                if proj.project_id == project_id:
-                    projects[project_id] = proj
-                    return _project_to_status(proj)
-            except:
-                continue
+    """저장된 프로젝트 이어하기 (flat 저장 구조: *_{project_id}.vox)"""
+    vox_path = find_project_file(project_id)
+    if not vox_path:
         raise HTTPException(status_code=404, detail="Project not found")
 
     project = load_project(vox_path)
