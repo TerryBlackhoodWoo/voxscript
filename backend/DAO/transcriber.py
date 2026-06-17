@@ -8,6 +8,8 @@ from datetime import timedelta
 from pathlib import Path
 from dataclasses import dataclass
 
+from DAO.bin_paths import get_ffmpeg, get_ffprobe
+
 SUPPORTED_LANGUAGES = {
     "auto": "자동 감지",
     "es": "스페인어",
@@ -158,7 +160,7 @@ def _transcribe_api_chunked(
     # ffprobe로 총 길이 파악
     probe = subprocess.run(
         [
-            "ffprobe",
+            get_ffprobe(),
             "-v",
             "quiet",
             "-show_entries",
@@ -193,7 +195,7 @@ def _transcribe_api_chunked(
             # ffmpeg으로 청크 추출
             subprocess.run(
                 [
-                    "ffmpeg",
+                    get_ffmpeg(),
                     "-i",
                     audio_path,
                     "-ss",

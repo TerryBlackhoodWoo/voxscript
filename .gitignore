@@ -1,12 +1,30 @@
+@"
+# 환경변수 / 인증
 .env
 credentials.json
 token.json
+
+# Python
 __pycache__/
 *.pyc
+
+# 로컬 전용 산출물
 downloads/
 output/
+
+# 프론트엔드 / 디자인 (별도 관리)
 frontEnd/
 frontEnd.zip
+design/
+
+# 빌드 / 패키징 산출물
 node_modules/
 dist/
+build/
+backend-dist/
+backend-build/
+resources/bin/
+
+# 기타
 package-lock.json
+"@ | Set-Content .gitignore

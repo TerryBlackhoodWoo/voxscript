@@ -4,10 +4,18 @@ Supports: Google Drive file or folder link / local file
 (YouTube removed due to cookie/size limitations)
 """
 
+"""
+VOXScript - Downloader
+Supports: Google Drive file or folder link / local file
+(YouTube removed due to cookie/size limitations)
+"""
+
 import os
 import re
 import subprocess
 from pathlib import Path
+
+from DAO.bin_paths import get_ffmpeg, get_ytdlp, get_ffmpeg_dir
 
 DEFAULT_IMPORT_DIR = Path.home() / "Downloads" / "VOXScript" / "temp"
 CREDENTIALS_PATH = Path(__file__).parent.parent / "credentials.json"
@@ -187,7 +195,7 @@ def download_audio(
                 )
                 subprocess.run(
                     [
-                        "ffmpeg",
+                        get_ffmpeg(),
                         "-f",
                         "concat",
                         "-safe",
@@ -224,7 +232,7 @@ def download_audio(
 
         # 영상 제목 추출
         title_result = subprocess.run(
-            ["yt-dlp", "--get-title", source],
+            [get_ytdlp(), "--get-title", source],
             capture_output=True,
             text=True,
         )
@@ -236,20 +244,26 @@ def download_audio(
             print(f"[Downloader] YouTube ID: {original_name}")
 
         print(f"[Downloader] YouTube audio extracting...")
+        ytdlp_args = [
+            get_ytdlp(),
+            "-x",
+            "--audio-format",
+            "mp3",
+            "--audio-quality",
+            "5",
+        ]
+        ffmpeg_dir = get_ffmpeg_dir()
+        if ffmpeg_dir:
+            ytdlp_args += ["--ffmpeg-location", ffmpeg_dir]
+        ytdlp_args += [
+            "--postprocessor-args",
+            "ffmpeg:-b:a 64k",
+            "-o",
+            str(work_dir / f"{output_name}.%(ext)s"),
+            source,
+        ]
         result = subprocess.run(
-            [
-                "yt-dlp",
-                "-x",
-                "--audio-format",
-                "mp3",
-                "--audio-quality",
-                "5",
-                "--postprocessor-args",
-                "ffmpeg:-b:a 64k",
-                "-o",
-                str(work_dir / f"{output_name}.%(ext)s"),
-                source,
-            ],
+            ytdlp_args,
             capture_output=True,
             text=True,
         )
@@ -268,7 +282,7 @@ def _convert_to_mp3(input_path: str, output_path: Path):
     print(f"[Downloader] Converting to mp3: {input_path}")
     result = subprocess.run(
         [
-            "ffmpeg",
+            get_ffmpeg(),
             "-i",
             input_path,
             "-vn",

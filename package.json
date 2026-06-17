@@ -1,12 +1,13 @@
 {
   "name": "voxscript",
-  "version": "0.2.0",
+  "version": "1.1.0",
   "description": "음성 자동 번역 파이프라인 + Electron 데스크탑 앱",
   "main": "electron/main.js",
   "scripts": {
     "dev": "concurrently \"cd frontend && yarn dev\" \"wait-on http://localhost:5173 && electron .\"",
     "build": "cd frontend && yarn build",
-    "package": "yarn build && electron-builder",
+    "build:backend": "cd backend && pyinstaller voxscript-backend.spec --distpath ../backend-dist --workpath ../backend-build --noconfirm",
+    "package": "yarn build:backend && yarn build && electron-builder",
     "electron": "electron ."
   },
   "build": {
@@ -17,10 +18,7 @@
     },
     "files": [
       "electron/**/*",
-      "frontend/dist/**/*",
-      "backend/**/*",
-      "!backend/**/__pycache__",
-      "!backend/**/*.pyc"
+      "frontend/dist/**/*"
     ],
     "win": {
       "target": "nsis",
@@ -30,10 +28,19 @@
       "target": "dmg",
       "icon": "electron/assets/icon.icns"
     },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    },
     "extraResources": [
       {
-        "from": "backend",
+        "from": "backend-dist/voxscript-backend",
         "to": "backend"
+      },
+      {
+        "from": "resources/bin",
+        "to": "bin"
       }
     ]
   },

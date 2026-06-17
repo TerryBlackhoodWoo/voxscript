@@ -14,39 +14,75 @@ const DEV_MODE = process.env.NODE_ENV === "development";
 let mainWindow = null;
 let backendProcess = null;
 
+// ── Resolve bundled binaries (ffmpeg / ffprobe / yt-dlp) ──
+function getBinaryDir() {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, "bin")
+    : path.join(__dirname, "..", "resources", "bin");
+}
+
+function resolveBundledBinary(name) {
+  const fs = require("fs");
+  const exeName = process.platform === "win32" ? `${name}.exe` : name;
+  const exePath = path.join(getBinaryDir(), exeName);
+  return fs.existsSync(exePath) ? exePath : null;
+}
+
 // ── Start Backend ─────────────────────────────────────────
 function startBackend() {
-  // 패키징 시 app.asar 안에서 실행되므로 resourcesPath 사용
-  const backendDir = app.isPackaged
-    ? path.join(process.resourcesPath, "backend")
-    : path.join(__dirname, "..", "backend");
-
   const fs = require("fs");
-  const os = require("os");
-  const home = os.homedir();
-  const localAppData = process.env.LOCALAPPDATA
-    || path.join(home, "AppData", "Local");
-  const candidates = [
-    path.join(localAppData, "Programs", "Python", "Python311", "python.exe"),
-    path.join(localAppData, "Programs", "Python", "Python312", "python.exe"),
-    path.join(localAppData, "Programs", "Python", "Python310", "python.exe"),
-    path.join(localAppData, "Programs", "Python", "Python313", "python.exe"),
-    "python",
-    "python3",
-  ];
-  const pythonCmd = candidates.find(p => {
-    try { return p === "python" || p === "python3" || fs.existsSync(p); } catch { return false; }
-  }) || "python";
-  console.log("[Electron] Python resolved:", pythonCmd);
 
-  const scriptPath = path.join(backendDir, "main.py");
+  let command;
+  let args;
+  let backendDir;
 
-  console.log(`[Electron] Backend starting: ${pythonCmd} ${scriptPath}`);
+  if (app.isPackaged) {
+    // 패키징된 빌드: PyInstaller로 빌드한 standalone 백엔드 exe를 그대로 실행.
+    // 사용자 PC에 Python이 설치돼 있는지 여부와 무관하게 동작함.
+    backendDir = path.join(process.resourcesPath, "backend");
+    const exeName = process.platform === "win32" ? "voxscript-backend.exe" : "voxscript-backend";
+    command = path.join(backendDir, exeName);
+    args = [];
+    console.log(`[Electron] Packaged backend: ${command}`);
+  } else {
+    // 개발 모드: 시스템 Python으로 main.py 직접 실행 (기존 동작 유지)
+    backendDir = path.join(__dirname, "..", "backend");
+    const os = require("os");
+    const home = os.homedir();
+    const localAppData = process.env.LOCALAPPDATA
+      || path.join(home, "AppData", "Local");
+    const candidates = [
+      path.join(localAppData, "Programs", "Python", "Python311", "python.exe"),
+      path.join(localAppData, "Programs", "Python", "Python312", "python.exe"),
+      path.join(localAppData, "Programs", "Python", "Python310", "python.exe"),
+      path.join(localAppData, "Programs", "Python", "Python313", "python.exe"),
+      "python",
+      "python3",
+    ];
+    command = candidates.find(p => {
+      try { return p === "python" || p === "python3" || fs.existsSync(p); } catch { return false; }
+    }) || "python";
+    args = [path.join(backendDir, "main.py")];
+    console.log(`[Electron] Dev backend: ${command} ${args.join(" ")}`);
+  }
 
-  backendProcess = spawn(pythonCmd, [scriptPath], {
+  // 번들된 ffmpeg / ffprobe / yt-dlp 경로를 env var로 전달.
+  // 없으면(=dev 모드에서 resources/bin이 비어있을 때) 설정하지 않고
+  // Python 쪽(DAO/bin_paths.py)이 시스템 PATH로 폴백하게 둠.
+  const extraEnv = {};
+  const ffmpegPath = resolveBundledBinary("ffmpeg");
+  const ffprobePath = resolveBundledBinary("ffprobe");
+  const ytdlpPath = resolveBundledBinary("yt-dlp");
+  if (ffmpegPath) extraEnv.FFMPEG_PATH = ffmpegPath;
+  if (ffprobePath) extraEnv.FFPROBE_PATH = ffprobePath;
+  if (ytdlpPath) extraEnv.YTDLP_PATH = ytdlpPath;
+  console.log("[Electron] Bundled binaries:", { ffmpegPath, ffprobePath, ytdlpPath });
+
+  backendProcess = spawn(command, args, {
     cwd: backendDir,
     env: {
       ...process.env,
+      ...extraEnv,
       VOXSCRIPT_PORT: String(API_PORT),
       PYTHONIOENCODING: 'utf-8',
       PYTHONUTF8: '1',
