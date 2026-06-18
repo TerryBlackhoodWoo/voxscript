@@ -6,12 +6,14 @@
 [![Electron](https://img.shields.io/badge/Electron-32-47848F)](https://www.electronjs.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.4.0-009688)](https://fastapi.tiangolo.com/)
 [![React](https://img.shields.io/badge/React-Vite-61dafb)](https://vitejs.dev/)
+[![Release](https://img.shields.io/github/v/release/TerryBlackhoodWoo/voxscript)](https://github.com/TerryBlackhoodWoo/voxscript/releases/latest)
 
 ---
 
 ## 프로젝트 소개
 
 > 🖥️ **배포 형태**: Windows 데스크탑 앱 (NSIS 인스톨러, PyInstaller로 백엔드까지 단일 실행파일화 — 사용자 PC에 Python 설치 불필요)
+> **다운로드**: [GitHub Releases](https://github.com/TerryBlackhoodWoo/voxscript/releases/latest) — 단, API 키/OAuth 자격증명은 배포판에 포함돼 있지 않아 별도 설정 필요 (아래 [환경 설정](#환경-설정) 참고)
 
 **Whisper API(STT) + DeepL(번역) + Gemini(전처리/화자구분/요약)** 파이프라인으로
 YouTube / Google Drive / 로컬 파일을 자동으로 번역 스크립트로 변환하는 Electron 데스크탑 앱입니다.
@@ -335,7 +337,23 @@ resources/
 - [x] **사이드바에 라벨링/저장 대기 프로젝트가 안 보이던 문제 수정** — 프론트엔드 프로젝트 목록 필터가 완료/오류 상태만 표시하고 있어서, 재시작 후 이어서 라벨링하려 해도 목록에 아예 안 떠서 클릭할 방법이 없었음 → 필터에 `labeling`/`saving` 단계 추가
 - [x] PyInstaller 콘솔창 숨기기 (`console=False`) — 위 항목들 실기기 검증 다 통과한 뒤 최종 적용
 
-> v1.1.0 목표였던 "핵심 파이프라인의 진짜 배포 가능한 상태"는 여기서 마무리. 다음은 v1.2.0(UI/CSS 다듬기)으로 이어감.
+> v1.1.0 목표였던 "핵심 파이프라인의 진짜 배포 가능한 상태"는 여기서 마무리.
+
+---
+
+### v1.2.0 — UI 앰버 톤 리스킨
+- [x] 전체 컬러 톤을 앰버/오렌지 계열로 리스킨 (사이드바 그라데이션, 설정 패널 다크 네이비 → 크림 톤 재조정)
+- [x] 사이드바 헤더에 로고 이미지(`VOXScriptLogo.png`) 적용
+- [x] 라벨링 화면 세그먼트 행 편집 UI 색상 체계 정리 (화자별 색상, 분리/병합 버튼 hover 색)
+
+### v1.2.1 — UI 버그 수정
+v1.2.0 릴리즈 후 실제 사용 중 발견된 시각적 버그 모음. 전부 `voxscript_frontend` 쪽 수정.
+- [x] **다크모드 텍스트 가시성 버그** — `script-title`/`save-title`/`labeling-title`/`save-done-title`(전부 `<h2>`) 클래스에 색이 명시적으로 지정 안 돼있어서, 레거시 `index.css`의 `h1, h2 { color: var(--text-h) }` 규칙을 그대로 물려받음. `--text-h`가 다크모드에서 거의 흰색(`#f3f4f6`)으로 바뀌는 변수라, OS가 다크모드면 크림색 배경 위에 제목 텍스트가 안 보이는 문제 → 4개 클래스에 `color: var(--text-primary)` 명시적으로 추가
+- [x] **본문 텍스트 가운데 정렬 버그** — 레거시 `index.css`의 `#root { text-align: center }`(예전 Vite 기본 템플릿 잔재)가 앱 전체에 상속돼서 Gemini 요약 등 본문이 의도와 다르게 가운데 정렬되던 문제 → `.app-layout`에 `text-align: left` 추가, `.summary-content`에도 동일 적용
+- [x] **Gemini 요약 마크다운 미반영** — `**굵게**` 같은 마크다운 문법이 그대로 별표 문자로 노출되던 문제 → 별도 라이브러리 없이 가벼운 `renderMarkdownBold()` 헬퍼로 `**...**` 패턴만 `<strong>`으로 변환
+- [x] **저장된 파일 목록 글자색 버그** — `.file-name`에 다른 규칙이 끼어들어 흰 글자로 보이던 문제 → `color: var(--text-primary) !important`로 고정
+
+> 다음에 시간 나면: `index.css`(레거시 Vite 스캐폴드 잔재) 자체를 정리해서, 이런 "색 지정 빠뜨리면 다크모드에서 안 보임" 패턴이 또 생기는 걸 근본적으로 막을 것.
 
 ---
 
