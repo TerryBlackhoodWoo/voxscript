@@ -194,13 +194,43 @@ def start_pipeline(req: StartRequest):
     return _project_to_status(project)
 
 
+def _load_from_disk_orphan_safe(project_id: str) -> Optional[VoxProject]:
+    """디스크에서 .vox를 불러올 때, "처리 중" 단계인데 이 서버 세션엔 그 처리를
+    이어갈 백그라운드 스레드가 없는 좀비 상태면 ERROR로 전환해서 반환.
+    (라벨링/저장 대기는 유저 입력을 기다리는 진짜 일시정지라 예외로 둠)
+    """
+    vox_path = find_project_file(project_id)
+    if not vox_path:
+        return None
+
+    project = load_project(vox_path)
+
+    ORPHANABLE_STAGES = {
+        PipelineStage.INIT,
+        PipelineStage.DOWNLOADING,
+        PipelineStage.TRANSCRIBING,
+        PipelineStage.CLEANING,
+        PipelineStage.DIARIZING,
+        PipelineStage.TRANSLATING,
+    }
+    if project.stage in ORPHANABLE_STAGES:
+        project.stage = PipelineStage.ERROR
+        project.error_msg = (
+            "이전 처리가 중단된 상태로 남아있습니다 "
+            "(앱이 비정상 종료됐거나 서버가 재시작됨). 처음부터 다시 시작해주세요."
+        )
+        save_project(project)
+
+    return project
+
+
 @app.get("/status/{project_id}", response_model=ProjectStatus)
 def get_status(project_id: str):
     if project_id not in projects:
         # 파일에서 로드 시도 (flat 저장 구조: *_{project_id}.vox)
-        vox_path = find_project_file(project_id)
-        if vox_path:
-            projects[project_id] = load_project(vox_path)
+        project = _load_from_disk_orphan_safe(project_id)
+        if project:
+            projects[project_id] = project
         else:
             raise HTTPException(status_code=404, detail="Project not found")
     return _project_to_status(projects[project_id])
@@ -269,11 +299,15 @@ def save_output(project_id: str, req: SaveRequest):
 @app.get("/load/{project_id}", response_model=ProjectStatus)
 def load_saved_project(project_id: str):
     """저장된 프로젝트 이어하기 (flat 저장 구조: *_{project_id}.vox)"""
-    vox_path = find_project_file(project_id)
-    if not vox_path:
+    # 이미 이 서버 세션에서 추적 중인 프로젝트면(=처리 스레드가 실제로 살아있을 수
+    # 있음) 디스크에서 다시 읽지 않고 그대로 반환
+    if project_id in projects:
+        return _project_to_status(projects[project_id])
+
+    project = _load_from_disk_orphan_safe(project_id)
+    if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    project = load_project(vox_path)
     projects[project_id] = project
     return _project_to_status(project)
 

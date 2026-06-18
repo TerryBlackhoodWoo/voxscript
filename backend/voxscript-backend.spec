@@ -91,7 +91,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name="voxscript-backend",
-    console=True,  # 디버깅 끝나고 안정화되면 False로 바꿔서 콘솔창 숨길 수 있음
+    console=False,  # 실기기 테스트(다운로드/STT/deno/.vox 이어하기) 전부 통과 후 적용
     upx=False,
 )
 

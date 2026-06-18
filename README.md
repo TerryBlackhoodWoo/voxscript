@@ -316,7 +316,7 @@ resources/
 - [x] 앱 아이콘 적용
 - [ ] 자동 업데이트(electron-updater) — 미구현, 보류
 
-### v1.1.0 — 오프라인 배포 패키징 (진행 중)
+### v1.1.0 — 오프라인 배포 패키징
 - [x] ffmpeg/ffprobe/yt-dlp 하드코딩 호출 제거 → `DAO/bin_paths.py`로 경로 해석 일원화
 - [x] PyInstaller 백엔드 빌드 스펙 작성 + 실제 빌드/구동 검증 (`google.genai`, `googleapiclient` hidden import 포함)
 - [x] `googleapiclient`가 기본으로 끌고 오는 discovery 문서 정리 (Drive v3만 남기고 나머지 제거, 97MB → 1MB)
@@ -330,12 +330,12 @@ resources/
 - [x] ffmpeg/ffprobe/yt-dlp 바이너리 `resources/bin/`에 실제 배치 + 실기기에서 standalone 구동 확인
 - [x] **YouTube 다운로드 시 yt-dlp 403 Forbidden 수정** — YouTube가 영상 URL 서명 검증에 JS 실행을 요구하도록 바뀌면서, JS 런타임 없는 yt-dlp 단독 호출이 막힘 → `deno` 런타임을 `resources/bin/`에 추가 배포, `bin_paths.get_deno()` + `downloader.py`의 두 yt-dlp 호출(제목 추출/오디오 추출)에 `--js-runtimes deno:<path>` 전달, `main.js`에 `DENO_PATH` 환경변수 주입
 - [x] **Windows 한국어 콘솔(cp949) 인코딩 크래시 수정** — frozen exe에서 `print()`에 이모지(예: `⏸`)가 들어가면 `cp949` 코덱이 인코딩 못 해서 파이프라인 전체가 죽던 문제. `main.js`에 이미 `PYTHONUTF8`/`PYTHONIOENCODING` env var가 있었음에도 frozen 빌드에서 안정적으로 반영 안 되는 PyInstaller 특성 확인 → `main.py`에서 `sys.stdout`/`sys.stderr`를 UTF-8로 직접 재설정(`errors="replace"` 포함)하는 방식으로 보완
-- [x] 실기기 인스톨러 테스트로 로컬 파일 + YouTube 다운로드 → STT → Gemini 전처리(라벨링 대기 직전)까지 정상 동작 확인
-- [ ] Windows 환경에서 Google Drive 인증 흐름까지 포함한 풀 테스트 (credentials.json frozen 경로 수정 검증 — 보류 중)
-- [ ] 재시작 후 프로젝트 이어하기(`.vox` 경로 수정) 실기기 검증
-- [ ] PyInstaller 콘솔창 숨기기 (`console=False`) — 위 항목들 다 통과한 뒤 마지막에 적용 예정
+- [x] 실기기 인스톨러 테스트로 로컬 파일 + YouTube + Google Drive 다운로드 → STT → Gemini 전처리 → 라벨링 대기까지 전체 플로우 정상 동작 확인
+- [x] **재시작 후 "좀비 상태" 프로젝트 처리** — 다운로드/STT/전처리/번역 단계 중 앱이 비정상 종료되면, 그 단계를 진행시키던 백그라운드 스레드는 사라지는데 `.vox` 파일엔 그 순간 단계가 그대로 남아있어서 재시작 후 다시 불러오면 멈춘 진행률을 영원히 보여주는 문제 발견 → `/status`·`/load`가 디스크에서 새로 불러올 때 이런 단계면 자동으로 ERROR로 전환하도록 수정 (라벨링/저장 대기는 유저 입력을 기다리는 진짜 일시정지라 예외)
+- [x] **사이드바에 라벨링/저장 대기 프로젝트가 안 보이던 문제 수정** — 프론트엔드 프로젝트 목록 필터가 완료/오류 상태만 표시하고 있어서, 재시작 후 이어서 라벨링하려 해도 목록에 아예 안 떠서 클릭할 방법이 없었음 → 필터에 `labeling`/`saving` 단계 추가
+- [x] PyInstaller 콘솔창 숨기기 (`console=False`) — 위 항목들 실기기 검증 다 통과한 뒤 최종 적용
 
-> BOM/GWP 같은 부가 기능 없이, 핵심 파이프라인의 "진짜 배포 가능한 상태" 만드는 게 v1.1.0의 목표.
+> v1.1.0 목표였던 "핵심 파이프라인의 진짜 배포 가능한 상태"는 여기서 마무리. 다음은 v1.2.0(UI/CSS 다듬기)으로 이어감.
 
 ---
 
@@ -354,10 +354,9 @@ resources/
 ## 알려진 이슈
 
 - **YouTube 다운로드**: 비공개/연령제한 영상은 yt-dlp가 쿠키 없이 처리 못 함 (JS 런타임 요구사항은 `deno` 연동으로 해결됨, 이건 별개의 제약).
-- **Google Drive 인증**: 개발자 본인의 OAuth 클라이언트 기준으로 동작하므로, 다른 PC에서 처음 실행하면 브라우저 로그인이 한 번 필요함. PyInstaller frozen 빌드에서 `credentials.json`/`token.json` 경로를 `sys.executable` 기준으로 잡도록 수정했으나, 실제 패키징된 exe로 인증 흐름까지 풀 테스트는 아직 안 함
+- **Google Drive 인증**: 개발자 본인의 OAuth 클라이언트 기준으로 동작하므로, 다른 PC에서 처음 실행하면 브라우저 로그인이 한 번 필요함. PyInstaller frozen 빌드에서 `credentials.json`/`token.json` 경로를 `sys.executable` 기준으로 잡도록 수정했고, 실제 패키징된 exe로 Drive 다운로드까지 실기기 검증 완료
 - **로컬 Whisper(CUDA) 폴백**: 배포용 패키징에서는 의도적으로 제외(용량 문제) — GPU가 있는 PC에서 dev 모드(`python main.py`)로 실행할 때만 사용 가능, `OPENAI_API_KEY`가 없을 때 자동으로 이 경로를 탐. 패키징 빌드는 `whisper` 모듈 자체가 빠져있어서 이 경로를 타면 `ModuleNotFoundError`로 즉시 드러남 (의도된 동작)
 - **`.env`/`credentials.json`/`token.json`은 빌드에 안 포함됨**: 셋 다 gitignore된 개인 파일이라 PyInstaller/electron-builder 산출물에 자동으로 안 들어감. 패키징 후 설치된 앱의 `resources/backend/`에 직접 복사해 넣어야 함 (재설치할 때마다 반복 필요 — 테스트 단계에서 반복 작업 줄이려고 로컬용 복사 스크립트를 따로 만들어 씀, 저장소에는 포함 안 함)
-- **PyInstaller 빌드 콘솔창**: 현재 `voxscript-backend.spec`이 `console=True`로 디버깅용 콘솔을 띄움. 실기기 검증 다 끝나면 `False`로 바꿔서 숨길 예정
 
 ---
 
