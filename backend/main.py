@@ -9,6 +9,14 @@ import threading
 from pathlib import Path
 from typing import Optional
 
+# Windows 콘솔 기본 코드페이지(cp949 등)는 ⏸ 같은 이모지/특수문자를 인코딩 못 해서
+# print()가 그대로 죽어버림 → stdout/stderr를 UTF-8로 강제 (errors="replace"로 한 번 더 방어)
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse

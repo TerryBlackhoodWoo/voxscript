@@ -73,9 +73,11 @@ function startBackend() {
   const ffmpegPath = resolveBundledBinary("ffmpeg");
   const ffprobePath = resolveBundledBinary("ffprobe");
   const ytdlpPath = resolveBundledBinary("yt-dlp");
+  const denoPath = resolveBundledBinary("deno");
   if (ffmpegPath) extraEnv.FFMPEG_PATH = ffmpegPath;
   if (ffprobePath) extraEnv.FFPROBE_PATH = ffprobePath;
   if (ytdlpPath) extraEnv.YTDLP_PATH = ytdlpPath;
+  if (denoPath) extraEnv.DENO_PATH = denoPath;
   console.log("[Electron] Bundled binaries:", { ffmpegPath, ffprobePath, ytdlpPath });
 
   backendProcess = spawn(command, args, {

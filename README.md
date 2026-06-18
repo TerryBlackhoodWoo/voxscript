@@ -113,6 +113,18 @@ Electron 패키징 빌드: main.js가 FFMPEG_PATH / FFPROBE_PATH / YTDLP_PATH
 → 어디서 실행되든 ffmpeg/ffprobe/yt-dlp 호출 코드는 한 줄도 안 바꿔도 됨
 ```
 
+### 6. YouTube JS 런타임 대응 (`deno` 연동)
+```
+YouTube가 영상 URL 서명 검증에 브라우저 수준 JS 실행을 요구하도록 변경
+→ JS 런타임 없는 yt-dlp 단독 호출은 403 Forbidden
+
+resources/bin/deno.exe를 같이 배포
+→ bin_paths.get_deno()로 경로 해석 (ffmpeg/ffprobe/yt-dlp와 동일한 패턴)
+→ yt-dlp 호출 시 --js-runtimes deno:<path> 전달 (제목 추출 / 오디오 추출 둘 다)
+
+→ 외부 서비스 정책 변화에 맞춰 무거운 브라우저 엔진 없이 대응
+```
+
 ---
 
 ## 빠른 시작
@@ -136,9 +148,11 @@ python pipeline.py "./video.mp4" --lang ja --format all --diarize --speakers 진
 ffmpeg/ffprobe/yt-dlp 바이너리와 컴파일된 Python 백엔드를 통째로 묶어서, 사용자 PC에 Python/ffmpeg가 전혀 없어도 동작하는 단일 인스톨러를 만듭니다.
 
 ```bash
-# 1) ffmpeg.exe / ffprobe.exe / yt-dlp.exe를 resources/bin/ 에 받아넣기
+# 1) ffmpeg.exe / ffprobe.exe / yt-dlp.exe / deno.exe를 resources/bin/ 에 받아넣기
 #    - ffmpeg: https://github.com/BtbN/FFmpeg-Builds/releases
 #    - yt-dlp: https://github.com/yt-dlp/yt-dlp/releases
+#    - deno: https://github.com/denoland/deno/releases (deno-x86_64-pc-windows-msvc.zip 안의 deno.exe)
+#            yt-dlp가 YouTube 서명 검증용 JS 런타임으로 사용 (없으면 403 Forbidden 발생)
 
 # 2) 백엔드를 PyInstaller로 단일 실행파일화 (backend-dist/voxscript-backend/ 생성)
 yarn build:backend
@@ -193,14 +207,16 @@ Google Drive 다운로드 기능은 API 키가 아니라 **OAuth 2.0 흐름**을
 | POST | `/save/{project_id}` | 최종 포맷 변환 + 파일 저장 (`stage != saving`이면 400) |
 | GET | `/load/{project_id}` | 저장된 `.vox` 프로젝트 이어하기 |
 
-> `/start`, `/resume`, `/save`는 모두 백그라운드 스레드에서 실행되고, 프론트엔드는 `/status/{project_id}`를 폴링해서 진행률·로그를 받아오는 구조입니다. Electron `main.js`의 IPC 핸들러(`startPipeline`, `resumePipeline`, `saveOutput`, `getStatus`, `getProjects`, `loadProject`, `getLanguages`, `getFormats`)가 위 엔드포인트들과 1:1로 매핑되어 있습니다.
+> `/start`, `/resume`, `/save`는 모두 백그라운드 스레드에서 실행되고, 프론트엔드는 `/status/{project_id}`를 폴링해서 진행률·로그를 받아오는 구조입니다.
+> **실제 통신 구조**: `voxscript_frontend`의 `App.jsx`가 위 엔드포인트들을 `http://localhost:8765`로 직접 `fetch` 호출합니다 (Electron IPC를 경유하지 않음). Electron `main.js`/`preload.js`의 `window.voxscript` 브릿지는 `selectFile`/`openFile`/`openFolder` 같은 **네이티브 OS 다이얼로그 전용**으로만 쓰입니다. `main.js`에 있는 `startPipeline`/`resumePipeline`/`saveOutput`/`getStatus`/`getProjects`/`loadProject`/`getLanguages`/`getFormats` IPC 핸들러는 현재 프론트엔드에서 호출되지 않는 상태입니다 (추후 IPC 경유 구조로 바꿀 경우를 위해 남겨둔 상태, 당장 정리 대상은 아님).
+> 포트(8765)는 `main.js`/`main.py`(`VOXSCRIPT_PORT` env var, 기본값 8765)/`App.jsx`(하드코딩) 세 군데서 각각 따로 맞춰져 있는 상태라, 셋 중 하나라도 바뀌면 나머지도 같이 바꿔야 함.
 
 ---
 
 ## 프로젝트 구조
 
 ```
-VOXScript/
+voxscript/
 ├── backend/
 │   ├── main.py                  ← FastAPI 서버 (v0.4.0 단계별 파이프라인)
 │   ├── pipeline.py              ← CLI 모드 진입점
@@ -223,15 +239,42 @@ VOXScript/
 │   ├── preload.js               ← contextBridge IPC 브릿지
 │   └── assets/
 │       └── icon.ico / icon.icns
-├── resources/
-│   └── bin/                     ← 배포용 바이너리 (gitignore, 빌드 전 별도 다운로드)
-│       ├── ffmpeg.exe
-│       ├── ffprobe.exe
-│       └── yt-dlp.exe
-├── frontend/                    ← React + Vite UI (별도 레포: voxscript_frontend)
-├── backend-dist/                ← PyInstaller 빌드 출력 (gitignore, `yarn build:backend`로 생성)
 ├── package.json
 └── .env.example
+voxscript_frontend/              ← React 19 + Vite UI (별도 레포)
+├── public/
+│   ├── favicon.svg
+│   └── icons.svg
+├── src/
+│   ├── assets/
+│   │   ├── VOXScriptLogo.png
+│   │   ├── hero.png
+│   │   └── react.svg / vite.svg
+│   ├── components/
+│   │   ├── Sidebar.jsx          ← 프로젝트 목록 + 단계(stage) 라벨 표시
+│   │   ├── SettingsPanel.jsx    ← 시작 설정 (언어 / 번역 타겟 / 출력 포맷 선택)
+│   │   ├── ScriptView.jsx       ← 진행률 바 + 결과 스크립트 뷰, 파일/폴더 열기
+│   │   ├── LabelingView.jsx     ← 라벨링 화면 (행 분리 ✂ / 병합 ⊕, 화자 지정)
+│   │   └── SavePanel.jsx        ← 저장 포맷 선택 + 저장 경로 지정
+│   ├── App.jsx                  ← 단계(STAGE) 전환 관리, 백엔드 API 직접 fetch 호출
+│   ├── App.css / index.css
+│   └── main.jsx
+├── eslint.config.js
+├── vite.config.js
+├── package.json
+└── yarn.lock
+
+
+voxscript_design/                ← 아이콘 디자인 일러스트
+
+resources/
+    └── bin/                     ← 배포용 바이너리 (gitignore, 빌드 전 별도 다운로드)
+        ├── ffmpeg.exe
+        ├── ffprobe.exe
+        ├── yt-dlp.exe
+        └── deno.exe             ← yt-dlp의 YouTube JS 런타임 (서명 검증용)
+
+
 ```
 
 ---
@@ -282,10 +325,15 @@ VOXScript/
 - [x] **PyInstaller frozen 빌드의 OAuth 자격증명 경로 버그 수정** — `downloader.py`의 `CREDENTIALS_PATH`가 `Path(__file__).parent.parent` 기준이라 onedir 빌드에서 `_internal/` 폴더 안쪽을 가리키게 됨(exe와 한 단계 어긋남) → `sys.frozen` 여부에 따라 `sys.executable` 기준으로 분기하도록 수정
 - [x] `/save` 엔드포인트에 `stage != SAVING`이면 400 반환하는 방어 코드 추가, 백엔드 기동 실패 시 `dialog.showErrorBox`로 사용자 안내 추가
 - [x] **`.gitignore` 정비** — 패키징 빌드 산출물(`dist/`, `backend-dist/`) 경유로 `credentials.json`/`token.json`이 함께 묶여 나가던 것을 확인 → 해당 OAuth 클라이언트 재발급 후 `.gitignore`에 `dist/`, `backend-dist/`, `credentials.json`, `token.json`, `.env` 전부 등록해 재발 방지
-- [ ] ffmpeg/ffprobe/yt-dlp 바이너리 `resources/bin/`에 실제 배치
-- [ ] Windows 환경에서 `yarn package` 풀 빌드 + 실기기 동작 검증 (특히 credentials.json 경로 수정, Google Drive 인증 흐름까지 포함)
-- [ ] `downloader.py` docstring 정리 (YouTube 관련 stale 코멘트 — 중복 블록만 제거됐고 내용 자체는 아직 미수정)
-- [ ] PyInstaller 콘솔창 숨기기 (`console=False`)
+- [x] `downloader.py` docstring 내용 수정 (YouTube가 yt-dlp 기반으로 실제 지원 중이라는 사실에 맞게 정정)
+- [x] **PyInstaller 빌드 용량 축소 (294MB → ~95MB)** — `openai-whisper`(배포판 미사용, dev 전용 폴백)가 끌고 오는 `numba`/`llvmlite`/`scipy`/`pandas`를 spec `excludes`에 추가
+- [x] ffmpeg/ffprobe/yt-dlp 바이너리 `resources/bin/`에 실제 배치 + 실기기에서 standalone 구동 확인
+- [x] **YouTube 다운로드 시 yt-dlp 403 Forbidden 수정** — YouTube가 영상 URL 서명 검증에 JS 실행을 요구하도록 바뀌면서, JS 런타임 없는 yt-dlp 단독 호출이 막힘 → `deno` 런타임을 `resources/bin/`에 추가 배포, `bin_paths.get_deno()` + `downloader.py`의 두 yt-dlp 호출(제목 추출/오디오 추출)에 `--js-runtimes deno:<path>` 전달, `main.js`에 `DENO_PATH` 환경변수 주입
+- [x] **Windows 한국어 콘솔(cp949) 인코딩 크래시 수정** — frozen exe에서 `print()`에 이모지(예: `⏸`)가 들어가면 `cp949` 코덱이 인코딩 못 해서 파이프라인 전체가 죽던 문제. `main.js`에 이미 `PYTHONUTF8`/`PYTHONIOENCODING` env var가 있었음에도 frozen 빌드에서 안정적으로 반영 안 되는 PyInstaller 특성 확인 → `main.py`에서 `sys.stdout`/`sys.stderr`를 UTF-8로 직접 재설정(`errors="replace"` 포함)하는 방식으로 보완
+- [x] 실기기 인스톨러 테스트로 로컬 파일 + YouTube 다운로드 → STT → Gemini 전처리(라벨링 대기 직전)까지 정상 동작 확인
+- [ ] Windows 환경에서 Google Drive 인증 흐름까지 포함한 풀 테스트 (credentials.json frozen 경로 수정 검증 — 보류 중)
+- [ ] 재시작 후 프로젝트 이어하기(`.vox` 경로 수정) 실기기 검증
+- [ ] PyInstaller 콘솔창 숨기기 (`console=False`) — 위 항목들 다 통과한 뒤 마지막에 적용 예정
 
 > BOM/GWP 같은 부가 기능 없이, 핵심 파이프라인의 "진짜 배포 가능한 상태" 만드는 게 v1.1.0의 목표.
 
@@ -305,10 +353,11 @@ VOXScript/
 
 ## 알려진 이슈
 
-- **YouTube 다운로드**: 비공개/연령제한 영상은 yt-dlp가 쿠키 없이 처리 못 함. `downloader.py` 상단 docstring에 "YouTube removed"라고 적혀 있는데 실제로는 yt-dlp 기반으로 살아있는 상태라 문서와 코드가 불일치 — 내용 자체는 아직 미수정
+- **YouTube 다운로드**: 비공개/연령제한 영상은 yt-dlp가 쿠키 없이 처리 못 함 (JS 런타임 요구사항은 `deno` 연동으로 해결됨, 이건 별개의 제약).
 - **Google Drive 인증**: 개발자 본인의 OAuth 클라이언트 기준으로 동작하므로, 다른 PC에서 처음 실행하면 브라우저 로그인이 한 번 필요함. PyInstaller frozen 빌드에서 `credentials.json`/`token.json` 경로를 `sys.executable` 기준으로 잡도록 수정했으나, 실제 패키징된 exe로 인증 흐름까지 풀 테스트는 아직 안 함
-- **로컬 Whisper(CUDA) 폴백**: 배포용 패키징에서는 의도적으로 제외(용량 문제) — GPU가 있는 PC에서 dev 모드(`python main.py`)로 실행할 때만 사용 가능, `OPENAI_API_KEY`가 없을 때 자동으로 이 경로를 탐
-- **PyInstaller 빌드 콘솔창**: 현재 `voxscript-backend.spec`이 `console=True`로 디버깅용 콘솔을 띄움. 안정화되면 `False`로 바꿔서 숨길 수 있음
+- **로컬 Whisper(CUDA) 폴백**: 배포용 패키징에서는 의도적으로 제외(용량 문제) — GPU가 있는 PC에서 dev 모드(`python main.py`)로 실행할 때만 사용 가능, `OPENAI_API_KEY`가 없을 때 자동으로 이 경로를 탐. 패키징 빌드는 `whisper` 모듈 자체가 빠져있어서 이 경로를 타면 `ModuleNotFoundError`로 즉시 드러남 (의도된 동작)
+- **`.env`/`credentials.json`/`token.json`은 빌드에 안 포함됨**: 셋 다 gitignore된 개인 파일이라 PyInstaller/electron-builder 산출물에 자동으로 안 들어감. 패키징 후 설치된 앱의 `resources/backend/`에 직접 복사해 넣어야 함 (재설치할 때마다 반복 필요 — 테스트 단계에서 반복 작업 줄이려고 로컬용 복사 스크립트를 따로 만들어 씀, 저장소에는 포함 안 함)
+- **PyInstaller 빌드 콘솔창**: 현재 `voxscript-backend.spec`이 `console=True`로 디버깅용 콘솔을 띄움. 실기기 검증 다 끝나면 `False`로 바꿔서 숨길 예정
 
 ---
 

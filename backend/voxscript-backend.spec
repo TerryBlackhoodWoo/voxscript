@@ -53,6 +53,12 @@ excluded_modules = [
     "triton",
     "tkinter",
     "matplotlib",
+    # openai-whisper(로컬 CUDA 폴백, 배포판에서 미사용)가 끌고 오는
+    # 오디오 처리용 의존성들 — main.py/DAO 어디서도 직접 안 씀
+    "numba",
+    "llvmlite",
+    "scipy",
+    "pandas",
 ]
 
 a = Analysis(

@@ -45,3 +45,9 @@ def get_ffprobe() -> str:
 
 def get_ytdlp() -> str:
     return _resolve("YTDLP_PATH", "yt-dlp")
+
+
+def get_deno() -> str:
+    """yt-dlp --js-runtimes deno:<path>용 런타임 경로. 번들된 deno가 없거나
+    PATH에도 없으면 그냥 "deno" 문자열이 되어 yt-dlp 자체 탐색에 맡겨짐."""
+    return _resolve("DENO_PATH", "deno")

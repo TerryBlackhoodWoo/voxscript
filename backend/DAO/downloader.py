@@ -1,7 +1,7 @@
 """
 VOXScript - Downloader
-Supports: Google Drive file or folder link / local file
-(YouTube removed due to cookie/size limitations)
+Supports: YouTube(yt-dlp) / Google Drive file or folder link / local file
+(YouTube: 비공개·연령제한 영상은 쿠키 없이 처리 불가)
 """
 
 import os
@@ -10,7 +10,7 @@ import sys
 import subprocess
 from pathlib import Path
 
-from DAO.bin_paths import get_ffmpeg, get_ytdlp, get_ffmpeg_dir
+from DAO.bin_paths import get_ffmpeg, get_ytdlp, get_ffmpeg_dir, get_deno
 
 
 def _backend_root() -> Path:
@@ -240,9 +240,16 @@ def download_audio(
         yt_match = _re.search(r"(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})", source)
         yt_id = yt_match.group(1) if yt_match else output_name
 
+        # YouTube가 영상 URL 서명에 JS 실행을 요구하도록 바뀌면서, JS 런타임
+        # 없이 yt-dlp만 쓰면 403 Forbidden이 나는 경우가 있음 → deno 런타임 지정
+        js_runtime_args = []
+        deno_path = get_deno()
+        if deno_path != "deno":  # 번들/PATH에서 실제로 찾은 경우만 명시적으로 지정
+            js_runtime_args = ["--js-runtimes", f"deno:{deno_path}"]
+
         # 영상 제목 추출
         title_result = subprocess.run(
-            [get_ytdlp(), "--get-title", source],
+            [get_ytdlp(), *js_runtime_args, "--get-title", source],
             capture_output=True,
             text=True,
         )
@@ -256,6 +263,7 @@ def download_audio(
         print(f"[Downloader] YouTube audio extracting...")
         ytdlp_args = [
             get_ytdlp(),
+            *js_runtime_args,
             "-x",
             "--audio-format",
             "mp3",
