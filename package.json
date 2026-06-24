@@ -2,12 +2,13 @@
   "name": "voxscript",
   "version": "1.2.1",
   "description": "음성 자동 번역 파이프라인 + Electron 데스크탑 앱",
+  "license": "UNLICENSED",
   "main": "electron/main.js",
   "scripts": {
-    "dev": "concurrently \"cd frontend && yarn dev\" \"wait-on http://localhost:5173 && electron .\"",
-    "build": "cd frontend && yarn build",
+    "dev": "concurrently \"npm run dev --prefix ../voxscript_frontend\" \"wait-on http://localhost:5173 && electron .\"",
+    "build": "npm run build --prefix ../voxscript_frontend && xcopy /E /I /Y ..\\voxscript_frontend\\dist frontend\\dist",
     "build:backend": "cd backend && pyinstaller voxscript-backend.spec --distpath ../backend-dist --workpath ../backend-build --noconfirm",
-    "package": "yarn build:backend && yarn build && electron-builder",
+    "package": "npm run build:backend && npm run build && electron-builder",
     "electron": "electron ."
   },
   "build": {
