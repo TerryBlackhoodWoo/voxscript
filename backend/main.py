@@ -6,8 +6,11 @@ VOXScript - FastAPI 서버 v0.4.0
 import os
 import sys
 import threading
+from contextlib import asynccontextmanager
+
 from pathlib import Path
 from typing import Optional
+import database_pg
 
 # Windows 콘솔 기본 코드페이지(cp949 등)는 ⏸ 같은 이모지/특수문자를 인코딩 못 해서
 # print()가 그대로 죽어버림 → stdout/stderr를 UTF-8로 강제 (errors="replace"로 한 번 더 방어)
@@ -47,7 +50,15 @@ from DAO.cleaner import clean
 from DAO.translator import translate, TARGET_LANGUAGES
 from DAO.formatter import format_and_save, OUTPUT_FORMATS
 
-app = FastAPI(title="VOXScript API", version="0.4.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await database_pg.connect()
+    yield
+    await database_pg.close()
+
+
+app = FastAPI(title="VOXScript API", version="0.4.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
