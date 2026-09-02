@@ -1,4 +1,4 @@
-# dao/usage_vox_dao.py
+# backend/DAO/usage_vox_dao.py
 from fastapi import HTTPException
 from database_pg import get_pool
 
@@ -36,3 +36,29 @@ async def get_current_month_usage(account_id: str) -> dict | None:
         account_id,
     )
     return dict(row) if row else None
+
+
+async def get_current_month_stt_seconds(account_id: str) -> int:
+    pool = get_pool()
+    row = await pool.fetchrow(
+        """
+        SELECT stt_seconds FROM usage_counters_vox
+        WHERE account_id = $1 AND usage_month = date_trunc('month', CURRENT_DATE)::date
+        """,
+        account_id,
+    )
+    return row["stt_seconds"] if row else 0
+
+
+async def add_stt_seconds(account_id: str, seconds: int) -> None:
+    pool = get_pool()
+    await pool.execute(
+        """
+        INSERT INTO usage_counters_vox (account_id, usage_month, stt_seconds)
+        VALUES ($1, date_trunc('month', CURRENT_DATE)::date, $2)
+        ON CONFLICT (account_id, usage_month)
+        DO UPDATE SET stt_seconds = usage_counters_vox.stt_seconds + $2
+        """,
+        account_id,
+        seconds,
+    )

@@ -6,6 +6,8 @@ VOXScript - FastAPI 서버 v0.4.0
 import os
 import sys
 import threading
+import asyncio
+from DAO import usage_vox_dao
 from contextlib import asynccontextmanager
 
 from pathlib import Path
@@ -15,12 +17,12 @@ import database_pg
 # Windows 콘솔 기본 코드페이지(cp949 등)는 ⏸ 같은 이모지/특수문자를 인코딩 못 해서
 # print()가 그대로 죽어버림 → stdout/stderr를 UTF-8로 강제 (errors="replace"로 한 번 더 방어)
 if sys.stdout and hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
 if sys.stderr and hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
 
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -29,8 +31,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 sys.path.insert(0, str(Path(__file__).parent))
-sys.stdout.reconfigure(line_buffering=True)
-sys.stderr.reconfigure(line_buffering=True)
+sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
+sys.stderr.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
 
 from project_schema import (
     VoxProject,
@@ -49,10 +51,13 @@ from DAO.transcriber import transcribe, SUPPORTED_LANGUAGES
 from DAO.cleaner import clean
 from DAO.translator import translate, TARGET_LANGUAGES
 from DAO.formatter import format_and_save, OUTPUT_FORMATS
+from services import auth_service
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global main_event_loop
+    main_event_loop = asyncio.get_running_loop()
     await database_pg.connect()
     yield
     await database_pg.close()
@@ -71,6 +76,8 @@ app.add_middleware(
 projects: dict[str, VoxProject] = {}
 # 로그 캐시
 logs: dict[str, list[str]] = {}
+# 백그라운드 스레드에서 asyncpg 풀(메인 이벤트 루프 소속)을 안전하게 쓰기 위해 저장
+main_event_loop: asyncio.AbstractEventLoop | None = None
 
 
 # ── 요청 모델 ───────────────────────────────────────────
@@ -93,6 +100,16 @@ class ResumeRequest(BaseModel):
 class SaveRequest(BaseModel):
     export_dir: Optional[str] = None  # None = 기본 경로
     formats: Optional[list[str]] = None  # None = 프로젝트 설정 따름
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
 
 
 # ── 응답 모델 ───────────────────────────────────────────
@@ -164,6 +181,12 @@ def root():
     return {"status": "ok", "service": "VOXScript API", "version": "0.4.0"}
 
 
+@app.post("/login", response_model=LoginResponse)
+async def login(req: LoginRequest):
+    token = await auth_service.login(req.username, req.password)
+    return LoginResponse(access_token=token)
+
+
 @app.get("/languages")
 def get_languages():
     return {"source": SUPPORTED_LANGUAGES, "target": TARGET_LANGUAGES}
@@ -181,8 +204,18 @@ def get_projects():
 
 
 @app.post("/start", response_model=ProjectStatus)
-def start_pipeline(req: StartRequest):
+async def start_pipeline(
+    req: StartRequest, account: dict = Depends(auth_service.get_current_account)
+):
     """1~3단계 실행: 다운로드 → STT → Gemini 전처리 → labeling 대기"""
+    used_seconds = await usage_vox_dao.get_current_month_stt_seconds(account["id"])
+    limit_seconds = account["monthly_minutes_limit"] * 60
+    if used_seconds >= limit_seconds:
+        raise HTTPException(
+            status_code=429,
+            detail=f"이번 달 사용 한도({account['monthly_minutes_limit']}분)를 초과했습니다.",
+        )
+
     settings = ProjectSettings(
         source=req.source,
         lang=req.lang,
@@ -197,7 +230,7 @@ def start_pipeline(req: StartRequest):
 
     thread = threading.Thread(
         target=_run_stage1,
-        args=(project.project_id,),
+        args=(project.project_id, account["id"]),
         daemon=True,
     )
     thread.start()
@@ -248,7 +281,11 @@ def get_status(project_id: str):
 
 
 @app.post("/resume/{project_id}", response_model=ProjectStatus)
-def resume_pipeline(project_id: str, req: ResumeRequest):
+def resume_pipeline(
+    project_id: str,
+    req: ResumeRequest,
+    account: dict = Depends(auth_service.get_current_account),
+):
     """2단계 완료: 라벨링 데이터 받아서 3~5단계 실행"""
     if project_id not in projects:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -285,7 +322,11 @@ def resume_pipeline(project_id: str, req: ResumeRequest):
 
 
 @app.post("/save/{project_id}", response_model=ProjectStatus)
-def save_output(project_id: str, req: SaveRequest):
+def save_output(
+    project_id: str,
+    req: SaveRequest,
+    account: dict = Depends(auth_service.get_current_account),
+):
     """5단계: 파일 저장"""
     if project_id not in projects:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -307,6 +348,15 @@ def save_output(project_id: str, req: SaveRequest):
     return _project_to_status(project)
 
 
+@app.get("/me")
+async def get_me(account: dict = Depends(auth_service.get_current_account)):
+    return {
+        "id": str(account["id"]),
+        "username": account["username"],
+        "is_admin": account["is_admin"],
+    }
+
+
 @app.get("/load/{project_id}", response_model=ProjectStatus)
 def load_saved_project(project_id: str):
     """저장된 프로젝트 이어하기 (flat 저장 구조: *_{project_id}.vox)"""
@@ -326,7 +376,7 @@ def load_saved_project(project_id: str):
 # ── 파이프라인 스테이지 ────────────────────────────────
 
 
-def _run_stage1(project_id: str):
+def _run_stage1(project_id: str, account_id: str):
     """1단계: 다운로드 → STT → Gemini 전처리 → labeling 대기"""
     import time as _time
 
@@ -348,7 +398,6 @@ def _run_stage1(project_id: str):
         )
         if original_name:
             project.original_name = original_name
-            # 프로젝트는 projects/ 폴더에 project_id.vox 파일로 저장
             from project_schema import DEFAULT_PROJECTS_DIR
 
             DEFAULT_PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -377,6 +426,21 @@ def _run_stage1(project_id: str):
             f"[2/3] STT complete [{_time.time()-t:.1f}s] → {len(transcribe_result.segments)} segments, lang={transcribe_result.detected_language}",
         )
 
+        # 사용량 기록 (마지막 세그먼트 종료 시각 ≈ 오디오 길이)
+        duration_seconds = int(
+            max((seg.end for seg in transcribe_result.segments), default=0)
+        )
+        if main_event_loop is None:
+            raise RuntimeError(
+                "메인 이벤트 루프가 아직 초기화되지 않았습니다 (서버 시작 순서 문제)."
+            )
+
+        future = asyncio.run_coroutine_threadsafe(
+            usage_vox_dao.add_stt_seconds(account_id, duration_seconds), main_event_loop
+        )
+        future.result()
+        _log(project_id, f"[사용량] {duration_seconds}초 기록됨")
+
         # Step 3: Gemini 전처리
         _update_stage(project, PipelineStage.CLEANING, 61)
         _log(
@@ -391,7 +455,6 @@ def _run_stage1(project_id: str):
             f"[3/3] Preprocessing complete [{_time.time()-t:.1f}s] → {cleaned_result.cleaned_count} segments",
         )
 
-        # 세그먼트 저장
         project.segments = [
             SegmentData(
                 index=seg.index,
@@ -402,7 +465,6 @@ def _run_stage1(project_id: str):
             for seg in cleaned_result.segments
         ]
 
-        # 2단계: 화자 라벨링 대기
         _update_stage(project, PipelineStage.LABELING, 0)
         _log(project_id, "⏸ Waiting for speaker labeling...")
 
@@ -446,9 +508,7 @@ def _run_stage2(project_id: str):
             temp_segs = [TempSeg(s) for s in project.segments]
             speaker_map = label_speakers(
                 temp_segs,
-                speakers=(
-                    project.settings.speakers if project.settings.speakers else None
-                ),
+                speakers=project.settings.speakers,  # 항상 list (빈 리스트도 diarizer의 truthy 체크와 동일하게 동작)
                 progress_callback=progress,
             )
 
@@ -479,21 +539,20 @@ def _run_stage2(project_id: str):
             )
             t = _time.time()
 
-            # CleanedResult 임시 구조 생성
             from DAO.cleaner import CleanedResult, CleanedSegment
 
-            class TempCleaned:
-                def __init__(self, segs, lang):
-                    self.segments = [
-                        CleanedSegment(s.index, s.start, s.end, s.text) for s in segs
-                    ]
-                    self.detected_language = lang
-                    self.original_count = len(segs)
-                    self.cleaned_count = len(segs)
-
-            temp_cleaned = TempCleaned(project.segments, src_lang)
+            cleaned_segments = [
+                CleanedSegment(s.index, s.start, s.end, s.text)
+                for s in project.segments
+            ]
+            cleaned_result = CleanedResult(
+                segments=cleaned_segments,
+                detected_language=src_lang,
+                original_count=len(project.segments),
+                cleaned_count=len(project.segments),
+            )
             translation_result = translate(
-                temp_cleaned,
+                cleaned_result,
                 target_lang=project.settings.target_lang,
                 progress_callback=progress,
             )
@@ -518,7 +577,9 @@ def _run_stage2(project_id: str):
         _log(project_id, f"❌ Error: {e}")
 
 
-def _run_stage3(project_id: str, export_dir: str = None, formats: list = None):
+def _run_stage3(
+    project_id: str, export_dir: Optional[str] = None, formats: Optional[list] = None
+):
     """5단계: 파일 저장"""
     import time as _time
 

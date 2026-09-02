@@ -355,6 +355,21 @@ v1.2.0 릴리즈 후 실제 사용 중 발견된 시각적 버그 모음. 전부
 
 > 다음에 시간 나면: `index.css`(레거시 Vite 스캐폴드 잔재) 자체를 정리해서, 이런 "색 지정 빠뜨리면 다크모드에서 안 보임" 패턴이 또 생기는 걸 근본적으로 막을 것.
 
+### v1.3.0 — Supabase 계정 인증 + 사용량 통제
+FABLE 백엔드의 계정/사용량 추적 패턴을 참고해, VOXScript 전용 로그인 인증과 월별 사용량 한도를 새로 도입. Supabase 프로젝트를 FABLE과 공유하되 테이블(`_vox` suffix)과 JWT 시크릿은 완전히 분리.
+- [x] Supabase에 `accounts_vox`/`usage_counters_vox`/`processing_logs_vox` 테이블 신설
+- [x] `backend/config.py`, `backend/database_pg.py` 신설 — asyncpg 커넥션 풀, `.env` 필수값(`DATABASE_URL`/`VOX_JWT_SECRET`) 누락 시 서버가 즉시 fail-fast
+- [x] `backend/services/auth_service.py` — bcrypt 비밀번호 검증, JWT 발급/검증, 5회 로그인 실패 시 15분 계정 잠금
+- [x] `POST /login`, `GET /me` 엔드포인트 추가
+- [x] `/start`, `/resume/{id}`, `/save/{id}` 전부 `Depends(get_current_account)`로 인증 필수화
+- [x] `/start` 호출 시점에 계정별 월간 STT 사용 한도(분 단위) 체크, 초과 시 429 차단
+- [x] STT 완료 시 실제 처리 길이를 `usage_counters_vox.stt_seconds`에 자동 누적
+- [x] **백그라운드 스레드의 asyncpg 풀 충돌 버그 수정** — `_run_stage1`이 별도 스레드에서 사용량을 기록할 때 `asyncio.run()`으로 새 이벤트 루프를 만들면서, 메인 루프 소속인 커넥션 풀을 건드려 `cannot perform operation: another operation is in progress` 크래시 발생 → `run_coroutine_threadsafe`로 메인 이벤트 루프에 위임하는 방식으로 수정
+- [x] 실기기 검증: 로그인 → JWT 발급 → `/start` 인증 통과 → 한도 초과 429 차단 → 유튜브 쇼츠 실제 다운로드~STT 완주 → `stt_seconds` DB 반영까지 전체 플로우 확인
+
+> 프론트엔드 로그인 화면(`voxscript_frontend`)과 Electron `safeStorage` 토큰 저장은 다음 버전으로 이월.
+
+
 ---
 
 ## 성능 참고

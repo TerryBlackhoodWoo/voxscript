@@ -1,5 +1,4 @@
-# dao/account_vox_dao.py
-
+# backend/DAO/account_vox_dao.py
 from database_pg import get_pool
 
 
@@ -7,7 +6,7 @@ async def find_by_username(username: str) -> dict | None:
     pool = get_pool()
     row = await pool.fetchrow(
         """
-        SELECT id, is_active, password_hash, failed_login_attempts, locked_until, is_admin, monthly_credit_limit
+        SELECT id, is_active, password_hash, failed_login_attempts, locked_until, is_admin, monthly_minutes_limit
         FROM accounts_vox
         WHERE username = $1
         """,
@@ -20,7 +19,7 @@ async def find_by_id(account_id: str) -> dict | None:
     pool = get_pool()
     row = await pool.fetchrow(
         """
-        SELECT id, is_active, is_admin, username, monthly_credit_limit
+        SELECT id, is_active, is_admin, username, monthly_minutes_limit
         FROM accounts_vox
         WHERE id = $1
         """,
