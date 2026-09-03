@@ -369,6 +369,15 @@ FABLE 백엔드의 계정/사용량 추적 패턴을 참고해, VOXScript 전용
 
 > 프론트엔드 로그인 화면(`voxscript_frontend`)과 Electron `safeStorage` 토큰 저장은 다음 버전으로 이월.
 
+### v1.4.0 — 중앙 인증 서버 분리 (진행 중)
+v1.3.0에서 만든 인증/사용량 로직을 데스크탑 앱 로컬 백엔드에 그대로 두면 배포가 불가능하다는 걸 뒤늦게 인지 — PyInstaller onedir 빌드는 사실상 압축 해제하면 소스가 그대로 노출되는 구조라, `.env`를 빌드에 포함시키면 `DATABASE_URL`/`VOX_JWT_SECRET`을 설치한 사람 누구나 평문으로 볼 수 있는 문제였음. 인증/사용량 로직을 별도 중앙 서버로 분리하는 작업 시작.
+- [x] 인증/DB 관련 코드(`config.py`, `database_pg.py`, `auth_service.py`, `account_vox_dao.py`, `usage_vox_dao.py`)를 별도 레포 [voxscript_auth_server](https://github.com/TerryBlackhoodWoo/voxscript_auth_server)로 이관
+- [x] 중앙 서버에 `/login`, `/me`, `/usage/status`, `/usage/record` HTTPS API 신설, Railway 배포 대상으로 구성 (Procfile 포함)
+- [ ] `voxscript/backend`에서 DB 직접 연결 제거, `central_client.py`로 중앙 서버 HTTPS 호출하는 방식으로 리팩터
+- [ ] Railway 실배포 + 로컬 백엔드 ↔ Railway 연동 검증
+- [ ] 프론트엔드 로그인 화면(`voxscript_frontend`) + Electron `safeStorage` 토큰 저장
+
+> 완료되면 로컬 백엔드(유저 PC에서 실행되는 프로세스)는 DB 자격증명을 전혀 갖지 않는 상태가 됨 — 인증/과금은 전부 중앙 서버가 담당하고, 로컬은 그 서버를 HTTPS로 호출하는 얇은 클라이언트로 남음.
 
 ---
 
