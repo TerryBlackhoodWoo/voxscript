@@ -43,4 +43,9 @@ contextBridge.exposeInMainWorld("voxscript", {
 
   // 출력 포맷 목록
   getFormats: () => ipcRenderer.invoke("get-formats"),
+
+  // 인증 토큰 저장 (safeStorage로 OS 키체인 암호화)
+  saveToken: (token) => ipcRenderer.invoke("save-token", token),
+  loadToken: () => ipcRenderer.invoke("load-token"),
+  clearToken: () => ipcRenderer.invoke("clear-token"),
 });

@@ -3,7 +3,7 @@
  * Launches FastAPI backend in background and displays React UI
  */
 
-const { app, BrowserWindow, ipcMain, dialog } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, safeStorage } = require("electron");
 const { spawn } = require("child_process");
 const path = require("path");
 const http = require("http");
@@ -245,6 +245,41 @@ ipcMain.handle("open-folder", async (event, filePath) => {
     ? path.dirname(filePath)
     : outputDir;
   await shell.openPath(fullPath);
+});
+
+// ── IPC: 인증 토큰 저장 (safeStorage) ──────────────────────
+function getTokenPath() {
+  const path = require("path");
+  return path.join(app.getPath("userData"), "auth_token.enc");
+}
+
+ipcMain.handle("save-token", (event, token) => {
+  const fs = require("fs");
+  if (!safeStorage.isEncryptionAvailable()) {
+    console.error("[Electron] safeStorage not available on this system");
+    return false;
+  }
+  fs.writeFileSync(getTokenPath(), safeStorage.encryptString(token));
+  return true;
+});
+
+ipcMain.handle("load-token", () => {
+  const fs = require("fs");
+  const tokenPath = getTokenPath();
+  if (!fs.existsSync(tokenPath)) return null;
+  try {
+    return safeStorage.decryptString(fs.readFileSync(tokenPath));
+  } catch (e) {
+    console.error("[Electron] Failed to decrypt token:", e.message);
+    return null;
+  }
+});
+
+ipcMain.handle("clear-token", () => {
+  const fs = require("fs");
+  const tokenPath = getTokenPath();
+  if (fs.existsSync(tokenPath)) fs.unlinkSync(tokenPath);
+  return true;
 });
 
 // ── IPC: 백엔드 API 공통 호출 헬퍼 ─────────────────────────

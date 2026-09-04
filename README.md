@@ -373,11 +373,23 @@ FABLE 백엔드의 계정/사용량 추적 패턴을 참고해, VOXScript 전용
 v1.3.0에서 만든 인증/사용량 로직을 데스크탑 앱 로컬 백엔드에 그대로 두면 배포가 불가능하다는 걸 뒤늦게 인지 — PyInstaller onedir 빌드는 사실상 압축 해제하면 소스가 그대로 노출되는 구조라, `.env`를 빌드에 포함시키면 `DATABASE_URL`/`VOX_JWT_SECRET`을 설치한 사람 누구나 평문으로 볼 수 있는 문제였음. 인증/사용량 로직을 별도 중앙 서버로 분리하는 작업 시작.
 - [x] 인증/DB 관련 코드(`config.py`, `database_pg.py`, `auth_service.py`, `account_vox_dao.py`, `usage_vox_dao.py`)를 별도 레포 [voxscript_auth_server](https://github.com/TerryBlackhoodWoo/voxscript_auth_server)로 이관
 - [x] 중앙 서버에 `/login`, `/me`, `/usage/status`, `/usage/record` HTTPS API 신설, Railway 배포 대상으로 구성 (Procfile 포함)
-- [ ] `voxscript/backend`에서 DB 직접 연결 제거, `central_client.py`로 중앙 서버 HTTPS 호출하는 방식으로 리팩터
-- [ ] Railway 실배포 + 로컬 백엔드 ↔ Railway 연동 검증
+- [x] `voxscript/backend`에서 DB 직접 연결 제거, `central_client.py`로 중앙 서버 HTTPS 호출하는 방식으로 리팩터
+- [x] Railway 실배포 + 로컬 백엔드 ↔ Railway 연동 검증
 - [ ] 프론트엔드 로그인 화면(`voxscript_frontend`) + Electron `safeStorage` 토큰 저장
 
 > 완료되면 로컬 백엔드(유저 PC에서 실행되는 프로세스)는 DB 자격증명을 전혀 갖지 않는 상태가 됨 — 인증/과금은 전부 중앙 서버가 담당하고, 로컬은 그 서버를 HTTPS로 호출하는 얇은 클라이언트로 남음.
+
+### v1.5.0 — 로그인 화면 + 관리자 페이지 (진행 중, 실기기 검증은 내일)
+프론트엔드에 로그인 게이트와 Electron `safeStorage` 기반 토큰 영속화를 붙이고, 계정 관리용 관리자 페이지를 추가.
+- [x] `LoginView.jsx` — 아이디/비밀번호 로그인 화면, 앱 첫 진입 화면으로 게이팅
+- [x] Electron `safeStorage`로 토큰 암호화 저장 (`main.js`의 `save-token`/`load-token`/`clear-token` IPC, `preload.js` 브릿지)
+- [x] `App.jsx` — 저장된 토큰 자동 로드, `/start`·`/resume`·`/save` 요청에 `Authorization` 헤더 부착, 401 시 자동 로그아웃
+- [x] 사이드바에 로그아웃 버튼 추가
+- [x] **관리자 페이지(`AdminView.jsx`)** — 계정 목록/생성/월 사용 한도 조정/활성-비활성 토글
+- [x] 로컬 백엔드에 `/me`, `/admin/accounts` 프록시 라우트 추가
+- [x] 중앙 서버(`voxscript_auth_server`)에 `require_admin` 의존성 + 계정 CRUD 엔드포인트 추가
+- [x] **라우트 등록 순서 버그 수정** — `/me`/`/admin/*` 라우트가 `if __name__ == "__main__":` 아래(즉 `uvicorn.run()` 블로킹 호출 이후)에 있어서 실제로 등록된 적이 없던 문제 발견 → 파일 상단 라우트 정의 구간으로 이동
+- [ ] 실기기에서 로그인 → 관리자 페이지 → 계정 생성까지 전체 플로우 검증 (관리자 API를 Railway에 막 배포한 직후라 아직 미검증, 내일 진행)
 
 ---
 

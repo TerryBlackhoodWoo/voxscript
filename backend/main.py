@@ -598,6 +598,43 @@ def _run_stage3(
         _log(project_id, f"❌ Error: {e}")
 
 
+class AdminCreateAccountRequest(BaseModel):
+    username: str
+    password: str
+    monthly_minutes_limit: int = 10
+    is_admin: bool = False
+
+
+class AdminUpdateAccountRequest(BaseModel):
+    monthly_minutes_limit: Optional[int] = None
+    is_active: Optional[bool] = None
+
+
+@app.get("/me")
+async def get_me(authorization: str = Header(...)):
+    return await central_client.get_me(authorization)
+
+
+@app.get("/admin/accounts")
+async def list_accounts(authorization: str = Header(...)):
+    return await central_client.list_accounts(authorization)
+
+
+@app.post("/admin/accounts")
+async def create_account(
+    req: AdminCreateAccountRequest, authorization: str = Header(...)
+):
+    return await central_client.create_account(authorization, req.model_dump())
+
+
+@app.patch("/admin/accounts/{account_id}")
+async def update_account(
+    account_id: str, req: AdminUpdateAccountRequest, authorization: str = Header(...)
+):
+    return await central_client.update_account(
+        authorization, account_id, req.model_dump(exclude_none=True)
+    )
+
 if __name__ == "__main__":
     import uvicorn
 
