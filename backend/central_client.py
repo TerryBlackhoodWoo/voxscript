@@ -6,8 +6,7 @@ import os
 import httpx
 from fastapi import HTTPException
 
-CENTRAL_API_URL = os.getenv("VOXSCRIPT_CENTRAL_API", "https://xxx.up.railway.app")
-
+CENTRAL_API_URL = os.getenv("VOXSCRIPT_CENTRAL_API", "https://web-production-00a61.up.railway.app")
 
 async def login(username: str, password: str) -> dict:
     async with httpx.AsyncClient(timeout=10) as client:
