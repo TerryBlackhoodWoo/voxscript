@@ -70,6 +70,7 @@ function startBackend() {
   // 없으면(=dev 모드에서 resources/bin이 비어있을 때) 설정하지 않고
   // Python 쪽(DAO/bin_paths.py)이 시스템 PATH로 폴백하게 둠.
   const extraEnv = {};
+  extraEnv.VOXSCRIPT_DATA_DIR = app.getPath("userData");
   const ffmpegPath = resolveBundledBinary("ffmpeg");
   const ffprobePath = resolveBundledBinary("ffprobe");
   const ytdlpPath = resolveBundledBinary("yt-dlp");
@@ -223,10 +224,7 @@ ipcMain.handle("get-api-port", () => API_PORT);
 ipcMain.handle("open-file", async (event, filePath) => {
   const { shell } = require("electron");
   const path = require("path");
-  const outputDir = path.join(
-    require("os").homedir(),
-    "Downloads", "VOXScript", "output"
-  );
+  const outputDir = path.join(app.getPath("userData"), "output");
   const fullPath = filePath.includes("\\") || filePath.includes("/")
     ? filePath
     : path.join(outputDir, filePath);

@@ -103,6 +103,18 @@ class LoginResponse(BaseModel):
     token_type: str = "bearer"
 
 
+class AdminCreateAccountRequest(BaseModel):
+    username: str
+    password: str
+    monthly_minutes_limit: int = 10
+    is_admin: bool = False
+
+
+class AdminUpdateAccountRequest(BaseModel):
+    monthly_minutes_limit: Optional[int] = None
+    is_active: Optional[bool] = None
+
+
 # ── 응답 모델 ───────────────────────────────────────────
 
 
@@ -117,6 +129,7 @@ class ProjectStatus(BaseModel):
     error_msg: str = ""
     log: list[str] = []
     is_done: bool = False
+    files: list[str] = []
 
 
 # ── 헬퍼 ───────────────────────────────────────────────
@@ -161,6 +174,7 @@ def _project_to_status(project: VoxProject) -> ProjectStatus:
         error_msg=project.error_msg,
         log=logs.get(project.project_id, []),
         is_done=project.stage == PipelineStage.DONE,
+        files=project.files,
     )
 
 
@@ -176,6 +190,32 @@ def root():
 async def login(req: LoginRequest):
     result = await central_client.login(req.username, req.password)
     return LoginResponse(**result)
+
+
+@app.get("/me")
+async def get_me(authorization: str = Header(...)):
+    return await central_client.get_me(authorization)
+
+
+@app.get("/admin/accounts")
+async def list_accounts(authorization: str = Header(...)):
+    return await central_client.list_accounts(authorization)
+
+
+@app.post("/admin/accounts")
+async def create_account(
+    req: AdminCreateAccountRequest, authorization: str = Header(...)
+):
+    return await central_client.create_account(authorization, req.model_dump())
+
+
+@app.patch("/admin/accounts/{account_id}")
+async def update_account(
+    account_id: str, req: AdminUpdateAccountRequest, authorization: str = Header(...)
+):
+    return await central_client.update_account(
+        authorization, account_id, req.model_dump(exclude_none=True)
+    )
 
 
 @app.get("/languages")
@@ -584,6 +624,7 @@ def _run_stage3(
         )
 
         project.summary = format_result.claude_summary or ""
+        project.files = format_result.saved_files
         _update_stage(project, PipelineStage.DONE, 100)
         _log(
             project_id,
@@ -597,43 +638,6 @@ def _run_stage3(
         save_project(project)
         _log(project_id, f"❌ Error: {e}")
 
-
-class AdminCreateAccountRequest(BaseModel):
-    username: str
-    password: str
-    monthly_minutes_limit: int = 10
-    is_admin: bool = False
-
-
-class AdminUpdateAccountRequest(BaseModel):
-    monthly_minutes_limit: Optional[int] = None
-    is_active: Optional[bool] = None
-
-
-@app.get("/me")
-async def get_me(authorization: str = Header(...)):
-    return await central_client.get_me(authorization)
-
-
-@app.get("/admin/accounts")
-async def list_accounts(authorization: str = Header(...)):
-    return await central_client.list_accounts(authorization)
-
-
-@app.post("/admin/accounts")
-async def create_account(
-    req: AdminCreateAccountRequest, authorization: str = Header(...)
-):
-    return await central_client.create_account(authorization, req.model_dump())
-
-
-@app.patch("/admin/accounts/{account_id}")
-async def update_account(
-    account_id: str, req: AdminUpdateAccountRequest, authorization: str = Header(...)
-):
-    return await central_client.update_account(
-        authorization, account_id, req.model_dump(exclude_none=True)
-    )
 
 if __name__ == "__main__":
     import uvicorn

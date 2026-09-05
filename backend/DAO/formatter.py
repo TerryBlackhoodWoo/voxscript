@@ -28,7 +28,12 @@ class FormatResult:
     auto_title: str | None = None
 
 
-DEFAULT_EXPORT_DIR = Path.home() / "Downloads" / "VOXScript" / "output"
+_data_dir_env = os.environ.get("VOXSCRIPT_DATA_DIR")
+_BASE_DIR = (
+    Path(_data_dir_env) if _data_dir_env else (Path.home() / "Downloads" / "VOXScript")
+)
+
+DEFAULT_EXPORT_DIR = _BASE_DIR / "output"
 
 
 def format_and_save(
@@ -147,6 +152,7 @@ def _extract_speaker(text: str) -> tuple[str, str]:
 def _save_excel(result: TranslationResult, path: Path):
     wb = openpyxl.Workbook()
     ws = wb.active
+    assert ws is not None
     ws.title = "Script"
 
     header_fill = PatternFill("solid", fgColor="1E3A5F")
@@ -164,7 +170,7 @@ def _save_excel(result: TranslationResult, path: Path):
 
     # 화자 컬럼이 있는지 확인
     has_speaker = any(
-        _extract_speaker(seg.translated.strip())[0] for seg in result.segments
+        _extract_speaker((seg.translated or "").strip())[0] for seg in result.segments
     )
 
     if has_speaker and not is_korean:
@@ -198,8 +204,8 @@ def _save_excel(result: TranslationResult, path: Path):
         row = seg.index + 2
 
         if has_speaker:
-            speaker, orig_text = _extract_speaker(seg.original.strip())
-            _, trans_text = _extract_speaker(seg.translated.strip())
+            speaker, orig_text = _extract_speaker((seg.original or "").strip())
+            _, trans_text = _extract_speaker((seg.translated or "").strip())
 
             if speaker and speaker not in speaker_colors:
                 color_idx = len(speaker_colors) % len(color_pool)
@@ -230,15 +236,15 @@ def _save_excel(result: TranslationResult, path: Path):
                     seg.index + 1,
                     seg.start_srt(),
                     seg.end_srt(),
-                    seg.original.strip(),
+                    (seg.original or "").strip(),
                 ]
             else:
                 values = [
                     seg.index + 1,
                     seg.start_srt(),
                     seg.end_srt(),
-                    seg.original.strip(),
-                    seg.translated.strip(),
+                    (seg.original or "").strip(),
+                    (seg.translated or "").strip(),
                 ]
 
         for col, val in enumerate(values, 1):
@@ -267,7 +273,7 @@ def _summarize_and_get_title(result: TranslationResult, hint: str) -> tuple[str,
     client = genai.Client(api_key=api_key)
 
     segs = result.segments[:200]
-    full_text = "\n".join(f"[{seg.index+1}] {seg.translated.strip()}" for seg in segs)
+    full_text = "\n".join(f"[{seg.index+1}] {(seg.translated or '').strip()}" for seg in segs)    
     truncated = len(result.segments) > 200
 
     prompt = f"""다음은 영상의 번역 스크립트입니다.
@@ -287,8 +293,7 @@ TITLE: 영상 제목 (한국어, 20자 이내, 특수문자 제외)
 4. **추가 참고사항** (번역 시 유의할 표현이나 맥락 등, 있으면)"""
 
     response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
-    text = response.text.strip()
-
+    text = (response.text or "").strip()
     title = hint
     lines = text.splitlines()
     for line in lines:

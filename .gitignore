@@ -28,3 +28,5 @@ resources/bin/
 # 기타
 package-lock.json
 "@ | Set-Content .gitignore
+
+.bin-tmp/

@@ -29,8 +29,12 @@ def _backend_root() -> Path:
 
 CREDENTIALS_PATH = _backend_root() / "credentials.json"
 TOKEN_PATH = _backend_root() / "token.json"
-DEFAULT_IMPORT_DIR = Path.home() / "Downloads" / "VOXScript" / "temp"
+_data_dir_env = os.environ.get("VOXSCRIPT_DATA_DIR")
+_BASE_DIR = (
+    Path(_data_dir_env) if _data_dir_env else (Path.home() / "Downloads" / "VOXScript")
+)
 
+DEFAULT_IMPORT_DIR = _BASE_DIR / "temp"
 GDRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
 

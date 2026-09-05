@@ -389,8 +389,15 @@ v1.3.0에서 만든 인증/사용량 로직을 데스크탑 앱 로컬 백엔드
 - [x] 로컬 백엔드에 `/me`, `/admin/accounts` 프록시 라우트 추가
 - [x] 중앙 서버(`voxscript_auth_server`)에 `require_admin` 의존성 + 계정 CRUD 엔드포인트 추가
 - [x] **라우트 등록 순서 버그 수정** — `/me`/`/admin/*` 라우트가 `if __name__ == "__main__":` 아래(즉 `uvicorn.run()` 블로킹 호출 이후)에 있어서 실제로 등록된 적이 없던 문제 발견 → 파일 상단 라우트 정의 구간으로 이동
-- [ ] 실기기에서 로그인 → 관리자 페이지 → 계정 생성까지 전체 플로우 검증 (관리자 API를 Railway에 막 배포한 직후라 아직 미검증, 내일 진행)
+- [x] 프로젝트/임시/출력 파일 저장 위치를 `~/Downloads/VOXScript` → Electron `userData` 경로(`%APPDATA%\VOXScript`)로 이전 — 설치 폴더가 재설치 시 갈아엎어지면서 데이터가 유실되는 문제 방지, 탐색 용이성도 개선 (`VOXSCRIPT_DATA_DIR` env var로 Electron → 백엔드 전달, 미설정 시 기존 Downloads 경로로 폴백)
+- [x] **"폴더 열기" 버튼 무반응 버그 수정** — `ProjectStatus`/`VoxProject`에 `files` 필드가 아예 없어서 프론트가 항상 빈 값만 받고 있었음 → 필드 추가, `_run_stage3`에서 저장된 파일 경로를 채워 넣도록 수정
+- [x] `resources/bin/`(ffmpeg·ffprobe·yt-dlp·deno) 바이너리 자동 다운로드 스크립트(`scripts/fetch-binaries.js`) 추가 — 없는 바이너리만 GitHub 릴리즈에서 받아오고 `yarn package`에 자동 연결, 매번 손으로 받아 넣던 작업 제거
+- [x] `SegmentData.translated`/`.original`이 `None`일 수 있는 지점에서 `.strip()`을 직접 호출하던 부분에 방어 코드 추가 (`formatter.py`)
+- [x] Electron 창 타이틀이 Vite 기본값("frontend")으로 표시되던 것 수정
+- [x] **관리자 API 라우트 등록 순서 버그 수정** — `/me`/`/admin/*` 라우트가 `if __name__ == "__main__":` 아래(즉 `uvicorn.run()` 블로킹 호출 이후)에 있어서 실제로 등록된 적이 없던 문제 발견 → 파일 상단 라우트 정의 구간으로 이동
+- [x] 실기기 인스톨러 테스트 중 **YouTube 다운로드 403 재발** 확인 — `resources/bin/deno.exe` 미배치가 원인 (자동 다운로드 스크립트로 해결). **AI 처리 키(`OPENAI_API_KEY` 등) 미설정 시 로컬 Whisper 폴백을 시도하다 배포판에서 제외된 모듈이라 크래시**하는 것도 확인 — 현재는 설치 후 `.env` 수동 배치가 필요한 상태 (이 키들은 아직 중앙 서버로 이관 전)
 
+> **다음 방향 결정 필요**: AI 처리 키(OpenAI/Gemini/DeepL)가 로컬 `.env`에 있어야 하는 구조라 "설치만 하면 바로 되는" 배포가 안 됨. 데스크탑 앱을 유지하며 AI 프록시만 중앙화할지, 웹 서비스(Railway 풀배포)로 전환할지 논의 중 — 제3자 배포가 목표라 사용량 통제·설치 마찰 면에서 후자 쪽에 무게가 실림. 다음 세션에서 웹 전환 설계 착수 예정.
 ---
 
 ## 성능 참고
